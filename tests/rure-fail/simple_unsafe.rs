@@ -19,4 +19,16 @@ impl Simple {
 	fn method(&self) {
 		println!("helllooooo");
 	}
+
+	unsafe fn bad(&self) {
+		unsafe {
+			println!("bad");
+		}
+	}
+
+	fn bad_but_good(&self) -> u8 {
+		unsafe {
+			1+1
+		}
+	}
 }

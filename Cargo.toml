@@ -1,0 +1,17 @@
+[package]
+name = "rure"
+version = "0.1.0"
+authors = ["Ian Smith <smith.ian@husky.neu.edu>"]
+edition = "2018"
+[lib]
+name = "rure"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rure"
+path = "src/bin/main.rs"
+
+[dependencies]
+
+[dev-dependencies]
+compiletest_rs = { version = "*", features = [ "stable" ] }

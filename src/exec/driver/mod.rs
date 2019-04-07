@@ -1,6 +1,7 @@
 
 
-
+mod analysis_passes;
+use analysis_passes::AnalysisHandler;
 
 use rustc::hir::Block;
 
@@ -25,8 +26,14 @@ impl Callbacks for GetTcntx {
     fn after_analysis(&mut self, compiler: &Compiler) -> bool {
         compiler.session().abort_if_errors();
         compiler.global_ctxt().unwrap().peek_mut().enter(|tcx| {
-            let _ids = collect_target_func_ids(tcx.hir());
-            println!("{:?}",_ids);
+            let ids = collect_target_func_ids(tcx.hir());
+
+            for id in ids {
+                let pass_handler = analysis_passes::AnalysisHandler::new(id, &tcx);
+                let errors = pass_handler.run_all_analyses();
+                //compiler.session().abort();
+
+            }
         });
 
         compiler.session().abort_if_errors();
@@ -158,5 +165,6 @@ pub fn run_executor(mut rustc_args: Vec<String>) {
         rustc_args.push(sysroot_flag);
         rustc_args.push(find_sysroot());
     }
-    rustc_driver::run_compiler(&rustc_args,&mut GetTcntx{},None,None);
+
+    rustc_driver::run_compiler(&rustc_args,&mut GetTcntx{},None,None).unwrap();
 }

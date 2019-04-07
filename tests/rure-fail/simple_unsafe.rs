@@ -1,6 +1,7 @@
 #![crate_type="lib"]
 
 fn stupid_func(p: usize) -> u32 {
+
     let v: *const u32 = p as *const u32;
     unsafe {
             return *v;
@@ -26,7 +27,7 @@ impl Simple {
 		}
 	}
 
-	fn bad_but_good(&self) -> u8 {
+	unsafe fn bad_but_good(&self) -> u8 {
 		unsafe {
 			1+1
 		}

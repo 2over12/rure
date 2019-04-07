@@ -12,6 +12,7 @@ name = "rure"
 path = "src/bin/main.rs"
 
 [dependencies]
+rsmt2 = "0.10.0"
 
 [dev-dependencies]
 compiletest_rs = { version = "*", features = [ "stable" ] }

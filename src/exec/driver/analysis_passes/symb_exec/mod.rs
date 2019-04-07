@@ -136,9 +136,10 @@ fn symbolize_statement<'ctx>(stat: &Statement<'ctx>, ctx: &mut ExecutionContext<
 	}
 }
 
-fn assign_into<'ctx>(ctx: &mut ExecutionContext<'ctx>, loc: &Place, val: &Rvalue<'ctx>) -> (Vec<Expr>,Vec<Declaration> ) {
+fn assign_into<'ctx>(ctx: &mut ExecutionContext<'ctx>, loc: &rustc::mir::Place<'ctx>, val: &Rvalue<'ctx>) -> (Vec<Expr>,Vec<Declaration> ) {
 	let new_id = ctx.allocator.alloc();
 	let new_dec = Declaration::decl_from(ctx.get_ty_from_plc(loc), new_id);
+	ctx.memory.get_mut(loc).unwrap().update(new_id);
 	match val {
 		Rvalue::Use(rand1) => {
 			let val = apply_rand(ctx,rand1);

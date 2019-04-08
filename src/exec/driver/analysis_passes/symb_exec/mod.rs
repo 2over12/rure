@@ -119,10 +119,10 @@ impl <'tcx> ExecutionContext<'tcx> {
 
 
 	fn prepare_assign(&mut self) {
-			for key in self.memory.keys() {
-				let handler = self.memory.get_mut(key).unwrap();
-				handler.update(self.alloc());
+			for val in self.memory.values_mut() {
+				val.update(self.allocator.borrow_mut().alloc())
 			}
+
 	}
 
 	fn memory_intersection(&self, other: &ExecutionContext) -> Vec<(Name,Name)> {
@@ -165,7 +165,7 @@ impl <'tcx> ExecutionContext<'tcx> {
 }
 
 pub fn eval_mir(mir: &Mir) -> (Node, Vec<Declaration>) {
-	let (ctx, mut init_decls) = ExecutionContext::new(mir);
+	let (mut ctx, mut init_decls) = ExecutionContext::new(mir);
 	let (node, mut resultant_decls) = process_block_as_node(&mir.basic_blocks()[BasicBlock::from_usize(0)], &mut ctx, None);
 	init_decls.append(&mut resultant_decls);
 	(node,init_decls)
@@ -173,7 +173,7 @@ pub fn eval_mir(mir: &Mir) -> (Node, Vec<Declaration>) {
 
 
 fn process_block_as_node<'ctx>(blk: &BasicBlockData<'ctx>,ctx: &mut ExecutionContext<'ctx>,  precondition: Option<Expr>) -> (Node, Vec<Declaration>) {
-	let (stats,mut dec1) = convert_statements(&blk.statements,&mut ctx);
+	let (stats,mut dec1) = convert_statements(&blk.statements,ctx);
 	let (sucessors, mut dec2) = process_terminator(ctx,&blk.terminator());
 	dec1.append(&mut dec2);
 	(Node::new(precondition, stats, sucessors), dec1)

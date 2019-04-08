@@ -61,7 +61,7 @@ impl <'tcx,'v> intravisit::Visitor<'v> for ContainsUsafe<'v,'tcx> {
         } else {
             let mut v = ContainsUsafe::new(self.ctx);
             intravisit::walk_block(&mut v, b);
-            self.state = v.consume();
+            self.state = self.state || v.consume();
         }
     }
 }
@@ -91,6 +91,7 @@ impl <'a, 'hir: 'a> ItemLikeVisitor<'hir> for IdCollector<'a,'hir> {
     fn visit_item(&mut self, item: &'hir Item) {
         if let ItemKind::Fn(decl,hdr,gen,bid) = &item.node {
             if hdr.unsafety == Unsafety::Normal {
+                println!("{:?}",decl);
                 let mut v =  ContainsUsafe::new(&self.comp_ctx);
                 v.visit_fn(FnKind::ItemFn(item.ident, &gen,*hdr,&item.vis,&item.attrs),&decl,*bid,item.span,item.hir_id);
                 if v.consume() {

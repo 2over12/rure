@@ -17,7 +17,7 @@ impl Node {
 		}
 	}
 
-	pub fn insert_at_leaves(self, exprs: Vec<Expr>) -> Node {
+	pub fn insert_at_leaves(mut self, mut exprs: Vec<Expr>) -> Node {
 		if self.sucessors.is_empty() {
 			self.statements.append(&mut exprs);
 			self

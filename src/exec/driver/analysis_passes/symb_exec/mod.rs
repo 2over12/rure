@@ -166,20 +166,20 @@ impl <'tcx> ExecutionContext<'tcx> {
 
 pub fn eval_mir(mir: &Mir) -> (Node, Vec<Declaration>) {
 	let (ctx, mut init_decls) = ExecutionContext::new(mir);
-	let (node, mut resultant_decls) = process_block_as_node(&mir.basic_blocks()[BasicBlock::from_usize(0)], ctx, None);
+	let (node, mut resultant_decls) = process_block_as_node(&mir.basic_blocks()[BasicBlock::from_usize(0)], &mut ctx, None);
 	init_decls.append(&mut resultant_decls);
 	(node,init_decls)
 }
 
 
-fn process_block_as_node<'ctx>(blk: &BasicBlockData<'ctx>,mut ctx: ExecutionContext<'ctx>,  precondition: Option<Expr>) -> (Node, Vec<Declaration>) {
+fn process_block_as_node<'ctx>(blk: &BasicBlockData<'ctx>,ctx: &mut ExecutionContext<'ctx>,  precondition: Option<Expr>) -> (Node, Vec<Declaration>) {
 	let (stats,mut dec1) = convert_statements(&blk.statements,&mut ctx);
 	let (sucessors, mut dec2) = process_terminator(ctx,&blk.terminator());
 	dec1.append(&mut dec2);
 	(Node::new(precondition, stats, sucessors), dec1)
 }
 
-fn process_terminator<'ctx>(mut ctx: ExecutionContext<'ctx>,term:&Terminator<'ctx>) -> (Vec<Node>, Vec<Declaration>) {
+fn process_terminator<'ctx>(mut ctx: &mut ExecutionContext<'ctx>,term:&Terminator<'ctx>) -> (Vec<Node>, Vec<Declaration>) {
 	match &term.kind {
 		TerminatorKind::Goto{
 			target
@@ -200,33 +200,33 @@ fn process_terminator<'ctx>(mut ctx: ExecutionContext<'ctx>,term:&Terminator<'ct
 				let prec = Expr::BinOp(Rator::Eq,Box::new(rand.clone()),Box::new(Expr::Value(SymTy::from_scalar(*val, switch_ty))));
 				total_prec = Expr::BinOp(Rator::And, Box::new(prec.clone()), Box::new(total_prec));
 				let curr_target = targets[i];
-				let branch_ctx = ctx.clone();
-				let (node,mut new_decls) = process_block_as_node(&ctx.mir.basic_blocks()[curr_target],branch_ctx, Some(prec));
+				let mut branch_ctx = ctx.clone();
+				let (node,mut new_decls) = process_block_as_node(&ctx.mir.basic_blocks()[curr_target],&mut branch_ctx, Some(prec));
 				nodes.push((branch_ctx,node));
 				decls.append(&mut new_decls);
 			}
 
 			total_prec = Expr::UnOp(Rator::Not, Box::new(total_prec));
-			let branch_ctx = ctx.clone();
-			let (node,mut new_decls) = process_block_as_node(&ctx.mir.basic_blocks()[targets[targets.len() - 1]],branch_ctx, Some(total_prec));
+			let mut branch_ctx = ctx.clone();
+			let (node,mut new_decls) = process_block_as_node(&ctx.mir.basic_blocks()[targets[targets.len() - 1]],&mut branch_ctx, Some(total_prec));
 			nodes.push((branch_ctx,node));
 			decls.append(&mut new_decls);
-			(rendevue_nodes_at_ctx(nodes,&ctx),decls)
+			(rendevue_nodes_at_ctx(nodes,&mut ctx),decls)
 		},
 		_ => return (vec![],vec![])
 
 	}
 }
 
-fn rendevue_nodes_at_ctx(nodes: Vec<(ExecutionContext,Node)>, ctx: &ExecutionContext) -> Vec<Node> {
+fn rendevue_nodes_at_ctx(mut nodes: Vec<(ExecutionContext,Node)>, ctx: &mut ExecutionContext) -> Vec<Node> {
 	ctx.prepare_assign();
 
 
 	   nodes.drain(..).map(|(res_ctx,nd)| {
-		let bindings: Vec<(Name,Name)> = ctx.memory_intersection(&res_ctx);
+		let mut bindings: Vec<(Name,Name)> = ctx.memory_intersection(&res_ctx);
 		let exprs: Vec<Expr> = bindings.drain(..).map(|(n1,n2)| 
 			Expr::BinOp(Rator::Eq, Box::new(Expr::Ref(n1)), Box::new(Expr::Ref(n2)))).collect();
-		nd.insert_at_leaves(exprs);
+		nd.insert_at_leaves(exprs)
 	}).collect()
 }
 

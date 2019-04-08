@@ -1,6 +1,6 @@
 use super::symb_exec::Name;
 use rustc::ty::{Ty, TyKind};
-use rustc::mir::interpret::Scalar;
+
 use rustc::mir;
 pub struct Node {
 	precondition: Option<Expr>,

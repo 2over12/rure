@@ -1,6 +1,7 @@
 use super::symb_exec::Name;
 use rustc::ty::{Ty, TyKind};
 use rustc::mir::interpret::Scalar;
+use rustc::mir;
 pub struct Node {
 	precondition: Option<Expr>,
 	statements: Vec<Expr>,
@@ -13,6 +14,19 @@ impl Node {
 			precondition: precondition,
 			statements: statements,
 			sucessors: sucessors
+		}
+	}
+
+	pub fn insert_at_leaves(self, exprs: Vec<Expr>) -> Node {
+		if self.sucessors.is_empty() {
+			self.statements.append(&mut exprs);
+			self
+		} else {
+			Node {
+				precondition: self.precondition,
+				statements: self.statements,
+				sucessors: self.sucessors.drain(..).map(|n| n.insert_at_leaves(exprs.clone())).collect()
+			}
 		}
 	}
 }
@@ -67,16 +81,64 @@ impl <T: From<usize> + Into<usize>,V> Index<T> for GuardedVec<T,V> {
 
 pub struct Declaration(Name,SymTy);
 
-
+#[derive(Clone)]
 pub enum Expr {
-	True,
 	Value(SymTy),
 	Ref(Name),
-	BinOp(Rator, Box<Expr>, Box<Expr>)
+	BinOp(Rator, Box<Expr>, Box<Expr>),
+	UnOp(Rator, Box<Expr>)
 }
 
+/*
+ * Rators should be seperated out and type checked against Logics. 
+ *
+ */
+ #[derive(Clone)]
 pub enum Rator {
-	Eq
+	Eq,
+	Add,
+	Sub,
+	Mul,
+	Div,
+	Mod,
+	NotEqual,
+	GreaterEqual,
+	GreaterThan,
+	LessEqual,
+	LessThan,
+	Not,
+	Neg,
+	And
+	/*
+		BitVector stuff should go here later
+	*/
+
+}
+
+impl Rator {
+	pub fn from_mir_bin(op: &mir::BinOp) -> Rator {
+		match op {
+			mir::BinOp::Add => Rator::Add,
+			mir::BinOp::Sub => Rator::Sub,
+			mir::BinOp::Mul => Rator::Mul,
+			mir::BinOp::Div => Rator::Div,
+			mir::BinOp::Rem => Rator::Mod,
+			mir::BinOp::Eq => Rator::Eq,
+			mir::BinOp::Lt => Rator::LessThan,
+			mir::BinOp::Le => Rator::LessEqual,
+			mir::BinOp::Gt => Rator::GreaterThan,
+			mir::BinOp::Ge => Rator::GreaterEqual,
+			mir::BinOp::Ne => Rator::NotEqual,
+			_ => unimplemented!()
+		}
+	}
+
+	pub fn from_mir_un(op: &mir::UnOp) -> Rator {
+		match op {
+			mir::UnOp::Not => Rator::Not,
+			mir::UnOp::Neg => Rator::Neg,
+		}
+	}
 }
 
 impl Declaration {
@@ -93,7 +155,7 @@ impl Declaration {
 				
 }
 
-
+#[derive(Clone)]
 pub enum SymTy {
 	Integer(usize),
 	Bool(bool),	
@@ -101,7 +163,7 @@ pub enum SymTy {
 
 
 impl SymTy {
-	pub fn from_scalar(sc: Scalar, ty: Ty) -> SymTy {
+	pub fn from_scalar(sc: u128, ty: Ty) -> SymTy {
 		unimplemented!()
 	}
 }

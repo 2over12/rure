@@ -1,4 +1,5 @@
-use super::symb_exec::Name;
+use rsmt2::SmtRes;
+pub use super::symb_exec::Name;
 use rustc::ty::{Ty, TyKind};
 
 use rustc::mir;
@@ -32,53 +33,6 @@ impl Node {
 		}
 	}
 }
-
-/*
-struct FuncId(usize);
-
-impl Into<usize> for FuncId {
-	fn into(self) -> usize {
-		self.0
-
-	}
-}
-
-impl From<usize> for FuncId {
-	fn from(t:usize) -> FuncId {
-		FuncId(t)
-	}
-}
-
-pub struct GuardedVec<T: From<usize> + Into<usize> ,V> {
-	raw: Vec<V>,
-	_marker: PhantomData<T>
-}
-
-impl  <T: From<usize> +Into<usize>,V> GuardedVec<T,V> {
-	fn new() -> GuardedVec<T,V> {
-		GuardedVec {
-			raw: Vec::new(),
-			_marker: PhantomData
-		}
-	}
-
-	fn push(&mut self, item:V) -> T {
-		self.raw.push(item);
-		T::from(self.raw.len()-1)
-	}
-
-}
-
-impl <T: From<usize> + Into<usize>,V> Index<T> for GuardedVec<T,V> {
-	type Output = V;
-
-	fn index(&self, idx: T) -> &V {
-		&self.raw[idx.into()]
-
-	}
-}
-*/
-
 
 
 pub struct Declaration(Name,SymTy);
@@ -175,5 +129,29 @@ impl SymTy {
 			_ => unimplemented!()
 
 		}
+	}
+}
+
+impl rsmt2::print::Sym2Smt<()> for Declaration {
+	fn sym_to_smt2<T: std::io::Write>(&self, w: &mut T,_:()) -> SmtRes<()> {
+		write!(w, "{}", self.0.to_id());
+		Ok(())
+
+	}
+}
+
+impl rsmt2::print::Sort2Smt<> for Declaration {
+	fn sort_to_smt2<T: std::io::Write>(&self, w: &mut T) -> SmtRes<()> {
+		match self.1 {
+			SymTy::Integer(_) => write!(w,"Int"),
+			SymTy::Bool(_) => write!(w,"Bool")
+		};
+		Ok(())
+	}
+}
+
+impl rsmt2::print::Expr2Smt<()> for Node {
+	fn expr_to_smt2<T: std::io::Write>(&self, w: &mut T,_:()) -> SmtRes<()> {
+
 	}
 }

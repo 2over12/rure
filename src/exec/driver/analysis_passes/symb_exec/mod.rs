@@ -54,7 +54,7 @@ impl NameHolder {
 pub struct Name(usize);
 
 impl Name {
-	fn to_id(&self) -> String {
+	pub fn to_id(&self) -> String {
 		format!("x{}",&self.0)
 	}
 }

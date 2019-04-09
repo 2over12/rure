@@ -213,11 +213,34 @@ fn process_terminator<'ctx>(mut ctx: &mut ExecutionContext<'ctx>,term:&Terminato
 			decls.append(&mut new_decls);
 			(rendevue_nodes_at_ctx(nodes,&mut ctx),decls)
 		},
-		_ => return (vec![],vec![])
+		// TODO inline function Calls.
+		TerminatorKind::Call {
+			func: _,
+			args: _,
+			destination: dest,
+			cleanup: _,
+			from_hir_call: _,
+		} =>  {
+			match dest {
+				None => unimplemented!(),
+				Some((ret,next)) => {
+					let n_id = ctx.alloc();
+					let ty = ctx.get_ty_from_plc(ret);
+					let decl = Declaration::decl_from(ty,n_id);
+					let hand = ctx.memory.get_mut(ret).unwrap();
+					hand.update(n_id);
+					let (node, mut decs) = process_block_as_node(&ctx.mir.basic_blocks()[*next], ctx, None);
+					decs.push(decl);
+					(vec![node],decs)
+				}
+			}
+		},
+		_ => (vec![],vec![])
 
 	}
 }
 
+// TODO Rendevue Local vars not initilaized in the first execution context
 fn rendevue_nodes_at_ctx(mut nodes: Vec<(ExecutionContext,Node)>, ctx: &mut ExecutionContext) -> Vec<Node> {
 	ctx.prepare_assign();
 
@@ -246,7 +269,6 @@ fn symbolize_statement<'ctx>(stat: &Statement<'ctx>, ctx: &mut ExecutionContext<
 	match &stat.kind {
 		StatementKind::StorageLive(lcl) => {
 			let n_name = ctx.alloc();
-			println!("Live {:?}",lcl);
 			ctx.memory.insert(Place::Base(PlaceBase::Local(*lcl)),NameHolder::new(n_name));
 			(vec![],vec![Declaration::decl_from(ctx.mir.local_decls[*lcl].ty,n_name)])
 		} ,
@@ -255,7 +277,6 @@ fn symbolize_statement<'ctx>(stat: &Statement<'ctx>, ctx: &mut ExecutionContext<
 			(vec![],vec![])
 		}
 		StatementKind::Assign(loc, val) => {
-		 println!("Assign {:?} into {:?}", val,loc);
 		 assign_into(ctx,loc,val)
 
 
@@ -309,8 +330,6 @@ fn apply_rand<'ctx>(ctx: &mut ExecutionContext<'ctx>, rand: &Operand<'ctx>, decl
 	match rand {
 		Operand::Copy(Place::Base(loc)) => {
 		 let loc = Place::Base(loc.clone());
-		 println!("Copying {:?}",loc);
-		 println!("{:?}", ctx.memory);
 		 Expr::Ref(ctx.memory.get(&loc).unwrap().to_id())},
 		Operand::Move(Place::Base(loc)) => { 
 			let loc = Place::Base(loc.clone());

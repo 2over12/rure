@@ -3,7 +3,7 @@
 extern crate rustc_driver;
 extern crate rustc;
 extern crate rustc_interface;
-
+extern crate rustc_mir;
 
 mod exec;
 

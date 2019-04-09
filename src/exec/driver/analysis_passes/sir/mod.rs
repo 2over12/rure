@@ -2,6 +2,8 @@ use super::symb_exec::Name;
 use rustc::ty::{Ty, TyKind};
 
 use rustc::mir;
+
+#[derive(Debug)]
 pub struct Node {
 	precondition: Option<Expr>,
 	statements: Vec<Expr>,
@@ -81,7 +83,7 @@ impl <T: From<usize> + Into<usize>,V> Index<T> for GuardedVec<T,V> {
 
 pub struct Declaration(Name,SymTy);
 
-#[derive(Clone)]
+#[derive(Debug,Clone)]
 pub enum Expr {
 	Value(SymTy),
 	Ref(Name),
@@ -93,7 +95,7 @@ pub enum Expr {
  * Rators should be seperated out and type checked against Logics. 
  *
  */
- #[derive(Clone)]
+ #[derive(Debug,Clone)]
 pub enum Rator {
 	Eq,
 	Add,
@@ -146,7 +148,6 @@ impl Declaration {
 		
 		Declaration(nm, match ty.sty {
 			TyKind::Bool => SymTy::Bool(false),
-			TyKind::Char => SymTy::Integer(0),
 			TyKind::Int(_) => SymTy::Integer(0),
 			TyKind::Uint(_) => SymTy::Integer(0),
 			TyKind::RawPtr(_) => SymTy::Integer(0),
@@ -155,15 +156,24 @@ impl Declaration {
 				
 }
 
-#[derive(Clone)]
+#[derive(Debug,Clone)]
 pub enum SymTy {
-	Integer(usize),
+	Integer(u128),
 	Bool(bool),	
 }
 
 
 impl SymTy {
 	pub fn from_scalar(sc: u128, ty: Ty) -> SymTy {
-		unimplemented!()
+		match ty.sty {
+			TyKind::Int(_) | TyKind::RawPtr(_) | TyKind::Uint(_) => SymTy::Integer(sc),
+			TyKind::Bool => SymTy::Bool(if sc == 1 {
+				true
+			} else {
+				false
+			}),
+			_ => unimplemented!()
+
+		}
 	}
 }

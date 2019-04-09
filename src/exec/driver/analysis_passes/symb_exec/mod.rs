@@ -151,6 +151,21 @@ impl <'tcx> ExecutionContext<'tcx> {
 	}
 
 
+	fn get_place_id(&self,plc: &Place<'tcx>) -> Name {
+		match plc {
+			Place::Base(bs) => match bs {
+				PlaceBase::Local(lid) => self.memory.get(&Place::Base(PlaceBase::Local(*lid))).unwrap().to_id() ,
+				_  => unimplemented!()
+			}
+			Place::Projection(proj) => {
+				match proj.elem {
+					mir::ProjectionElem::Deref => self.get_place_id(&proj.base),
+					_ => unimplemented!()
+
+			}
+		}
+	}
+}
 	fn get_ty_from_plc(&self,plc: &Place<'tcx>) -> Ty {
 		ty_form_plc_mir(plc, self.mir)
 	}
@@ -371,7 +386,7 @@ fn apply_rand<'ctx>(ctx: &mut ExecutionContext<'ctx>, rand: &Operand<'ctx>, decl
 
 fn deref_unknown(ctx: &mut ExecutionContext,  plc: &Place,decls: &mut Vec<Declaration>) -> Expr {
 	let n_id = ctx.alloc();
-	println!("deref {}", n_id.to_id());
+	println!("deref {}",ctx.get_place_id(plc).to_id());
 	let ty = ctx.get_ty_from_plc(plc);
 	let decl = Declaration::decl_from(ty, n_id);
 	decls.push(decl);

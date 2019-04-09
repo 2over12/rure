@@ -15,9 +15,9 @@ pub fn solve_sir(decls: Vec<Declaration>, nd: Node) -> bool {
 	let mut out = std::io::stdout();
 	for decl in &decls {
 		write!(&mut out,"(declare-fun ");
-		decl.sort_to_smt2(&mut out);
-		write!(&mut out,"() ");
 		decl.sym_to_smt2(&mut out, ());
+		write!(&mut out," () ");
+		decl.sort_to_smt2(&mut out);
 		write!(&mut out," )");
 		write!(&mut out, "\n");
 		solver.declare_const(decl,decl).unwrap();

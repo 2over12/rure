@@ -18,7 +18,7 @@ struct Simple {
 
 impl Simple {
 	fn method(&self) {
-		println!("helllooooo");
+		println!("hi");
 	}
 
 	unsafe fn bad(&self) {

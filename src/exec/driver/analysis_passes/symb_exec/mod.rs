@@ -95,6 +95,7 @@ impl <'tcx> ExecutionContext<'tcx> {
 
 		let mut decls = Vec::new();
 		let f_id = allocator.alloc();
+		println!("init f {}",f_id.to_id());
 		let lcl = mir::Local::from_usize(0);
 		let decl = Declaration::decl_from(mir.local_decls[lcl].ty, f_id);
 		let loc = Place::Base(PlaceBase::Local(lcl));
@@ -103,6 +104,7 @@ impl <'tcx> ExecutionContext<'tcx> {
 
 		for lcl_id in 1..mir.arg_count+1 {
 			let n_id = allocator.alloc();
+			println!("arg {}",n_id.to_id());
 			let lcl = mir::Local::from_usize(lcl_id);
 			let decl = Declaration::decl_from(mir.local_decls[lcl].ty, n_id);
 			let loc = Place::Base(PlaceBase::Local(lcl));
@@ -118,10 +120,16 @@ impl <'tcx> ExecutionContext<'tcx> {
 	}
 
 
-	fn prepare_assign(&mut self) {
-			for val in self.memory.values_mut() {
-				val.update(self.allocator.borrow_mut().alloc())
+	fn prepare_assign(&mut self) -> Vec<Declaration> {
+		let mut decls = Vec::new();
+			for (key,val) in self.memory.iter_mut() {
+				let t = ty_form_plc_mir(key,self.mir);
+				let n_id = self.allocator.borrow_mut().alloc();
+				let decl = Declaration::decl_from(t, n_id);
+				decls.push(decl);
+				val.update(n_id);
 			}
+			decls
 
 	}
 
@@ -144,15 +152,20 @@ impl <'tcx> ExecutionContext<'tcx> {
 
 
 	fn get_ty_from_plc(&self,plc: &Place<'tcx>) -> Ty {
+		ty_form_plc_mir(plc, self.mir)
+	}
+}
+
+fn ty_form_plc_mir<'tcx>(plc: &Place<'tcx>, mir: &Mir<'tcx>) -> Ty<'tcx> {
 		match plc {
 			Place::Base(bs) => match bs {
-				PlaceBase::Local(lid) => self.mir.local_decls[*lid].ty ,
+				PlaceBase::Local(lid) => mir.local_decls[*lid].ty ,
 				PlaceBase::Static(st) => st.ty,
 				_  => unimplemented!()
 			}
 			Place::Projection(proj) => {
 				match proj.elem {
-					mir::ProjectionElem::Deref => match self.get_ty_from_plc(&proj.base).sty {
+					mir::ProjectionElem::Deref => match ty_form_plc_mir(&proj.base,mir).sty {
 						TyKind::RawPtr(tam) => tam.ty,
 						TyKind::Ref(_,ty,_) => ty,
 						_ => unimplemented!()
@@ -162,7 +175,6 @@ impl <'tcx> ExecutionContext<'tcx> {
 			},
 		}
 	}
-}
 
 pub fn eval_mir(mir: &Mir) -> (Node, Vec<Declaration>) {
 	let (mut ctx, mut init_decls) = ExecutionContext::new(mir);
@@ -211,7 +223,9 @@ fn process_terminator<'ctx>(mut ctx: &mut ExecutionContext<'ctx>,term:&Terminato
 			let (node,mut new_decls) = process_block_as_node(&ctx.mir.basic_blocks()[targets[targets.len() - 1]],&mut branch_ctx, Some(total_prec));
 			nodes.push((branch_ctx,node));
 			decls.append(&mut new_decls);
-			(rendevue_nodes_at_ctx(nodes,&mut ctx),decls)
+			let (new_nodes, mut additional_decls) = rendevue_nodes_at_ctx(nodes,&mut ctx);
+			decls.append(&mut additional_decls);
+			(new_nodes,decls)
 		},
 		// TODO inline function Calls.
 		TerminatorKind::Call {
@@ -241,16 +255,16 @@ fn process_terminator<'ctx>(mut ctx: &mut ExecutionContext<'ctx>,term:&Terminato
 }
 
 // TODO Rendevue Local vars not initilaized in the first execution context
-fn rendevue_nodes_at_ctx(mut nodes: Vec<(ExecutionContext,Node)>, ctx: &mut ExecutionContext) -> Vec<Node> {
-	ctx.prepare_assign();
+fn rendevue_nodes_at_ctx(mut nodes: Vec<(ExecutionContext,Node)>, ctx: &mut ExecutionContext) -> (Vec<Node>,Vec<Declaration>) {
+	let decls = ctx.prepare_assign();
 
 
-	   nodes.drain(..).map(|(res_ctx,nd)| {
+	   (nodes.drain(..).map(|(res_ctx,nd)| {
 		let mut bindings: Vec<(Name,Name)> = ctx.memory_intersection(&res_ctx);
 		let exprs: Vec<Expr> = bindings.drain(..).map(|(n1,n2)| 
 			Expr::BinOp(Rator::Eq, Box::new(Expr::Ref(n1)), Box::new(Expr::Ref(n2)))).collect();
 		nd.insert_at_leaves(exprs)
-	}).collect()
+	}).collect(),decls)
 }
 
 fn convert_statements<'ctx>(stats: &Vec<Statement<'ctx>>, ctx: &mut ExecutionContext<'ctx>) -> (Vec<Expr>, Vec<Declaration>) {
@@ -357,6 +371,7 @@ fn apply_rand<'ctx>(ctx: &mut ExecutionContext<'ctx>, rand: &Operand<'ctx>, decl
 
 fn deref_unknown(ctx: &mut ExecutionContext,  plc: &Place,decls: &mut Vec<Declaration>) -> Expr {
 	let n_id = ctx.alloc();
+	println!("deref {}", n_id.to_id());
 	let ty = ctx.get_ty_from_plc(plc);
 	let decl = Declaration::decl_from(ty, n_id);
 	decls.push(decl);

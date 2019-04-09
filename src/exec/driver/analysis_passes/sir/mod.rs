@@ -152,6 +152,103 @@ impl rsmt2::print::Sort2Smt<> for Declaration {
 
 impl rsmt2::print::Expr2Smt<()> for Node {
 	fn expr_to_smt2<T: std::io::Write>(&self, w: &mut T,_:()) -> SmtRes<()> {
+		let mut is_prec = false;
+		if let Some(prec) = &self.precondition {
+			write!(w,"(=> ");
+			prec.expr_to_smt2(w, ())?;
+			is_prec = true;
+		}
+
+		write!(w,"(and true ");
+		for stat in &self.statements {
+			stat.expr_to_smt2(w,())?;
+		}
+
+
+		for succ in &self.sucessors {
+			succ.expr_to_smt2(w, ())?;
+		}
+
+		write!(w,")");
+
+		if is_prec {
+			write!(w,")");
+		}
+
+
+		Ok(())
 
 	}
+}
+
+impl rsmt2::print::Expr2Smt<()> for Expr {
+	fn expr_to_smt2<T: std::io::Write>(&self, w: &mut T,_:()) -> SmtRes<()> {
+		match self {
+			Expr::Ref(nm) => {write!(w,"{} ",nm.to_id());},
+			Expr::UnOp(op,rand) => {
+				write!(w,"(");
+				op.expr_to_smt2(w, ());
+				rand.expr_to_smt2(w,());
+				write!(w,")");
+			},
+			Expr::BinOp(op,rand1,rand2) => {
+				write!(w,"(");
+				op.expr_to_smt2(w, ());
+				rand1.expr_to_smt2(w,());
+				rand2.expr_to_smt2(w,());
+
+				if let Rator::NotEqual = op {
+					write!(w,")");
+				}
+				write!(w,")");
+			},
+			Expr::Value(val) => {
+				val.expr_to_smt2(w,());
+			}
+		}
+
+		Ok(())
+	} 
+}
+
+impl rsmt2::print::Expr2Smt<()> for Rator {
+	fn expr_to_smt2<T: std::io::Write>(&self, w: &mut T,_:()) -> SmtRes<()> {
+		write!(w,"{}", match self {
+			Rator::Eq => "=",
+			Rator::Add => "+",
+			Rator::And => "and",
+			Rator::Div => "div",
+			Rator::GreaterEqual => ">=",
+			Rator::GreaterThan => ">",
+			Rator::LessEqual => "<=",
+			Rator::LessThan => "<",
+			Rator::Mod => "mod",
+			Rator::Mul => "*",
+			Rator::Neg => "-",
+			Rator::Not => "not",
+			Rator::NotEqual => "(not (=",
+			Rator::Sub => "-",
+		});
+		write!(w," ");
+		Ok(())
+	} 
+}
+
+impl rsmt2::print::Expr2Smt<()> for SymTy {
+	fn expr_to_smt2<T: std::io::Write>(&self, w: &mut T,_:()) -> SmtRes<()> {
+		match self {
+			SymTy::Bool(bl) => {
+				if *bl {
+					write!(w,"true ");
+				} else {
+					write!(w,"false ");
+				}
+			},
+			SymTy::Integer(num) => {
+				write!(w,"{} ",num);
+			}
+		}
+
+		Ok(())
+	} 
 }

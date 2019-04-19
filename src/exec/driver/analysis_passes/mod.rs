@@ -49,9 +49,9 @@ impl  <'a,'tcx,'gcx >AnalysisHandler<'a,'tcx, 'gcx> {
 
 	
 	pub fn run_all_analyses(&self) -> Vec<ErrorInfo> {
-			let (node, decls) = symb_exec::eval_mir(&self.code);
+			let sir = symb_exec::eval_mir(&self.code);
 			
-			println!("{:?}",smt::solve_sir(decls,node));
+			println!("{:?}",smt::solve_sir(sir));
 
 			vec![]
 	}

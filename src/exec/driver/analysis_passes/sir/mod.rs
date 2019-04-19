@@ -1,3 +1,5 @@
+
+use std::collections::HashMap;
 use rsmt2::SmtRes;
 pub use super::symb_exec::Name;
 use rustc::ty::{Ty, TyKind};
@@ -35,7 +37,41 @@ impl Node {
 }
 
 
+pub struct Sir {
+	decls: HashMap<Declaration, Vec<MirVariableProps>>,
+	map: Node
+
+}
+
+impl Sir {
+	pub fn new(map: Node, decls: HashMap<Declaration, Vec<MirVariableProps>>) -> Sir {
+		Sir {
+			decls,
+			map
+		}
+	}
+
+	pub fn get_decls(&self) -> Vec<&Declaration> {
+		self.decls.keys().collect()
+	}
+
+	pub fn get_decl_prop(&self, dec: &Declaration) -> Option<&Vec<MirVariableProps>> {
+		self.decls.get(dec)
+	}
+
+	pub fn get_parent(&self) -> &Node {
+		&self.map
+	}
+}
+
+#[derive(Debug,Hash,Eq,PartialEq)]
 pub struct Declaration(Name,SymTy);
+
+
+#[derive(Debug)]
+pub enum MirVariableProps {
+	IsDerefed
+}
 
 #[derive(Debug,Clone)]
 pub enum Expr {
@@ -107,10 +143,13 @@ impl Declaration {
 			TyKind::RawPtr(_) => SymTy::Integer(0),
 			_ => unimplemented!()})
 	}
-				
+		
+	pub fn to_expr(&self) -> Expr {
+		Expr::Ref(self.0)
+	}	
 }
 
-#[derive(Debug,Clone)]
+#[derive(Debug,Clone,Eq,PartialEq,Hash)]
 pub enum SymTy {
 	Integer(u128),
 	Bool(bool),	

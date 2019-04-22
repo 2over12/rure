@@ -1,38 +1,57 @@
+
 use crate::exec::driver::analysis_passes::sir::Sir;
 use rsmt2::Solver;
-
+use super::sir::NodeId;
 
 
 use super::sir::{Rator,Expr,SymTy};
 
 
-use rsmt2::print::Sort2Smt;
-use rsmt2::print::Sym2Smt;
-use rsmt2::print::Expr2Smt;
-use std::io::Write;
 
-pub fn solve_sir(sir: Sir) -> bool {
+
+use super::sir::MirVariableProp;
+
+
+pub fn solve_sir(sir: &Sir, entry: NodeId, additional_constraints: Vec<Expr>) -> bool {
 	let mut solver =  Solver::default(()).unwrap();
-	let mut out = std::io::stdout();
-	for decl in sir.get_decls() {
-		write!(&mut out,"(declare-fun ");
-		decl.sym_to_smt2(&mut out, ());
-		write!(&mut out," () ");
-		decl.sort_to_smt2(&mut out);
-		write!(&mut out," )");
-		write!(&mut out, "\n");
-		solver.declare_const(decl,decl).unwrap();
+	//let mut out = std::io::stdout();
+	
+/*	let vals = sir.get_all_names().filter_map(|x| if let Some(prop) = sir.get_declaration(x).get_property().first() {
+		Some((x, prop))
+	} else {
+		None
+	});
 
-		if let Some(props) = sir.get_decl_prop(decl) {
-			let n_expr = Expr::BinOp(Rator::Eq,Box::new(decl.to_expr()),Box::new(Expr::Value(SymTy::Integer(0))));
+	for (interested_name, MirVariableProp::IsDerefed(nid) ) in vals {
+		let mut solver =  Solver::default(()).unwrap();
+		for name in sir.get_all_names() {
+			solver.declare_const(&name,sir.get_declaration(name)).unwrap();
+
 		}
+
+
+		let res:String = sir.to_smt(entry);
+		solver.assert(&Expr::BinOp(Rator::Eq, Box::new(Expr::Ref(interested_name)), Box::new(Expr::Value(SymTy::Integer(0))))).unwrap();
+
+		
+		solver.assert(&sir.get_path_constraint(*nid)).unwrap();
+		
+
+		solver.assert(&res).unwrap();
+
+		println!("{:?}",solver.check_sat().unwrap());
+	};*/
+
+	for name in sir.get_all_names() {
+		solver.declare_const(&name,sir.get_declaration(name)).unwrap();
 	}
 
-	let nd = sir.get_parent();
-	nd.expr_to_smt2(&mut out, ());
-	out.flush();
-	solver.assert(&nd).unwrap();
+	for additional in additional_constraints.iter() {
+		solver.assert(&additional).unwrap();
+	}
 
-
+	let res:String = sir.to_smt(entry);
+	solver.assert(&res).unwrap();
 	solver.check_sat().unwrap()
+	
 }

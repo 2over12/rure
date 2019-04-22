@@ -1,76 +1,226 @@
 
-use std::collections::HashMap;
-use rsmt2::SmtRes;
-pub use super::symb_exec::Name;
+
+use std::io::Write;
+use rsmt2::errors::SmtRes;
 use rustc::ty::{Ty, TyKind};
 
 use rustc::mir;
 
+mod structures;
+use std::io::Cursor;
+
+use rsmt2::print::Expr2Smt;
+use structures::NodeVec;
+use structures::NameVec;
+pub use structures::Name;
+pub use structures::NodeId;
+
+use rsmt2::print::Sort2Smt;
+
 #[derive(Debug)]
 pub struct Node {
-	precondition: Option<Expr>,
 	statements: Vec<Expr>,
-	sucessors: Vec<Node>
 }
 
 impl Node {
-	pub fn new(precondition: Option<Expr>, statements: Vec<Expr>, sucessors: Vec<Node>) -> Node {
+	fn new() -> Node {
 		Node {
-			precondition: precondition,
-			statements: statements,
-			sucessors: sucessors
+			statements: Vec::new()
 		}
 	}
 
-	pub fn insert_at_leaves(mut self, mut exprs: Vec<Expr>) -> Node {
-		if self.sucessors.is_empty() {
-			self.statements.append(&mut exprs);
-			self
-		} else {
-			Node {
-				precondition: self.precondition,
-				statements: self.statements,
-				sucessors: self.sucessors.drain(..).map(|n| n.insert_at_leaves(exprs.clone())).collect()
-			}
+	fn add_expr(&mut self, ex: Expr) {
+		self.statements.push(ex);
+	}
+
+
+	pub fn is_empty(&self) ->bool {
+		self.statements.is_empty()
+	}
+
+	fn to_smt(&self) -> String {
+		let mut res = String::new();
+		for state in self.statements.iter() {
+			res.push_str(&state.to_smt());
 		}
+		res
 	}
 }
 
 
+
+#[derive(Debug,Clone)]
+pub struct Edge(Option<Expr>, NodeId);
+
+impl Edge {
+	fn get_precondition(&self) -> Option<Expr> {
+		self.0.clone()
+	}
+
+	fn get_target(&self) -> NodeId {
+		self.1
+	}
+
+	pub fn new(precondition: Option<Expr>, nid: NodeId) -> Edge {
+		Edge(precondition,nid)
+	}
+	
+
+	fn to_smt(&self, sir: &Sir) -> String {
+		let mut res = String::new();
+		res.push_str("(=> ");
+		if let Some(x) = &self.0 {
+			res.push_str(&x.to_smt());
+			res.push(' ');
+		} else {
+			res.push_str("true ");
+		}
+
+		res.push_str(&sir.node_to_smt(self.1));
+		res.push(')');
+		res
+	}
+}
+
+
+
+
+#[derive(Debug)]
 pub struct Sir {
-	decls: HashMap<Declaration, Vec<MirVariableProps>>,
-	map: Node
+	declarations: NameVec<Declaration>,
+	nodes: NodeVec<Node>,
+	forward_edges: NodeVec<Vec<Edge>>,
+	backward_edges: NodeVec<Vec<Edge>>
 
 }
 
 impl Sir {
-	pub fn new(map: Node, decls: HashMap<Declaration, Vec<MirVariableProps>>) -> Sir {
+	pub fn to_smt(&self, start: NodeId) -> String {
+		self.node_to_smt(start)
+	}
+
+
+	fn node_to_smt(&self, nid: NodeId) -> String {
+		let mut total = String::new();
+
+		total.push_str("(and true ");
+		let curr_node = &self.nodes[nid];
+		total.push_str(&curr_node.to_smt());
+		total.push_str(&self.process_all_children(nid));
+		total.push_str(")");
+
+		total
+	}
+
+
+	fn process_all_children(&self, nid: NodeId) -> String {
+		let n_edges = &self.forward_edges[nid];
+		let mut total = String::new();
+		for edge in n_edges {
+			total.push_str(&edge.to_smt(&self));
+		}
+		total
+	}
+
+	pub fn new() -> Sir {
 		Sir {
-			decls,
-			map
+			declarations: NameVec::new(),
+			nodes: NodeVec::new(),
+			forward_edges: NodeVec::new(),
+			backward_edges: NodeVec::new(),
 		}
 	}
 
-	pub fn get_decls(&self) -> Vec<&Declaration> {
-		self.decls.keys().collect()
+	pub fn add_declaration(&mut self,decl: Declaration) -> Name {
+		self.declarations.push(decl)
 	}
 
-	pub fn get_decl_prop(&self, dec: &Declaration) -> Option<&Vec<MirVariableProps>> {
-		self.decls.get(dec)
+	pub fn get_declaration(&self, nm: Name) -> &Declaration {
+		&self.declarations[nm]
 	}
 
-	pub fn get_parent(&self) -> &Node {
-		&self.map
+	pub fn add_property_to_declaration(&mut self, nm: Name, prop: MirVariableProp) {
+		self.declarations[nm].add_property(prop);
+	}
+
+
+	pub fn get_all_names(&self) -> impl Iterator<Item = Name> {
+		self.declarations.into_iter()
+	}
+
+
+	pub fn get_node(&self, nid: NodeId) -> &Node {
+		&self.nodes[nid]
+	}
+
+	pub fn get_node_mut(&mut self, nid: NodeId) -> &mut Node {
+		&mut self.nodes[nid]
+	}
+
+	pub fn get_out_edges(&self, nid: NodeId) -> &Vec<Edge> {
+		&self.forward_edges[nid]
+	}
+
+	pub fn get_in_edges(&self, nid: NodeId) -> &Vec<Edge> {
+		&self.backward_edges[nid]
+	}
+
+	pub fn add_node(&mut self) -> NodeId {
+		let nid = self.nodes.push(Node::new());
+		let oid = self.forward_edges.push(vec![]);
+		let fid = self.backward_edges.push(vec![]);
+		assert_eq!(nid,oid);
+		assert_eq!(nid, fid);
+		nid
+	}
+
+	pub fn add_expr_to_node(&mut self, nid: NodeId, expr: Expr) {
+		self.nodes[nid].add_expr(expr);
+	}
+
+	pub fn add_edge(&mut self, nid: NodeId, edge: Edge) {
+		self.backward_edges[edge.get_target()].push(Edge::new(edge.get_precondition(),nid));
+		self.forward_edges[nid].push(edge);
+		
+	}
+
+	pub fn get_path_constraint(&self, nid: NodeId) -> Expr {
+		let mut total_exp = Vec::new();
+		let mut cid = nid;
+		let mut pred = self.get_in_edges(cid).clone().pop();
+		while let Some(before) = pred {
+			total_exp.push(before.get_precondition());
+			cid = before.get_target();
+			pred = self.get_in_edges(cid).clone().pop();
+		}
+
+		total_exp.into_iter().filter_map(|x|x)
+		.fold(Expr::Value(SymTy::Bool(true)), |x, y| Expr::BinOp(Rator::And, Box::new(x), Box::new(y)))
+	}
+
+}
+
+#[derive(Debug)]
+pub struct Declaration(SymTy, Vec<MirVariableProp>);
+
+impl Declaration {
+	fn add_property(&mut self, prop: MirVariableProp) {
+		self.1.push(prop)
+	}
+
+	pub fn new_declaration(&self) -> Declaration {
+		Declaration(self.0.clone(), vec![])
+	}
+
+	pub fn get_property(&self) -> &Vec<MirVariableProp> {
+		&self.1
 	}
 }
 
-#[derive(Debug,Hash,Eq,PartialEq)]
-pub struct Declaration(Name,SymTy);
-
 
 #[derive(Debug)]
-pub enum MirVariableProps {
-	IsDerefed
+pub enum MirVariableProp {
+	IsDerefed(NodeId)
 }
 
 #[derive(Debug,Clone)]
@@ -134,19 +284,24 @@ impl Rator {
 }
 
 impl Declaration {
-	pub fn decl_from(ty: Ty, nm: Name) -> Declaration {
-		
-		Declaration(nm, match ty.sty {
+	pub fn decl_from(ty: Ty) -> Declaration {	
+		Declaration(match ty.sty {
 			TyKind::Bool => SymTy::Bool(false),
 			TyKind::Int(_) => SymTy::Integer(0),
 			TyKind::Uint(_) => SymTy::Integer(0),
 			TyKind::RawPtr(_) => SymTy::Integer(0),
-			_ => unimplemented!()})
-	}
-		
-	pub fn to_expr(&self) -> Expr {
-		Expr::Ref(self.0)
+			_ => unimplemented!()}, vec![])
 	}	
+}
+
+impl Sort2Smt for Declaration {
+	fn sort_to_smt2<T: Write>(&self, w: &mut T) -> SmtRes<()> {
+		write!(w,"{}",match self.0 {
+			SymTy::Integer(_) => "Int",
+			SymTy::Bool(_) => "Bool"
+		})?;
+		Ok(())
+	} 
 }
 
 #[derive(Debug,Clone,Eq,PartialEq,Hash)]
@@ -171,52 +326,12 @@ impl SymTy {
 	}
 }
 
-impl rsmt2::print::Sym2Smt<()> for Declaration {
-	fn sym_to_smt2<T: std::io::Write>(&self, w: &mut T,_:()) -> SmtRes<()> {
-		write!(w, "{}", self.0.to_id());
-		Ok(())
 
-	}
-}
-
-impl rsmt2::print::Sort2Smt<> for Declaration {
-	fn sort_to_smt2<T: std::io::Write>(&self, w: &mut T) -> SmtRes<()> {
-		match self.1 {
-			SymTy::Integer(_) => write!(w,"Int"),
-			SymTy::Bool(_) => write!(w,"Bool")
-		};
-		Ok(())
-	}
-}
-
-impl rsmt2::print::Expr2Smt<()> for Node {
-	fn expr_to_smt2<T: std::io::Write>(&self, w: &mut T,_:()) -> SmtRes<()> {
-		let mut is_prec = false;
-		if let Some(prec) = &self.precondition {
-			write!(w,"(=> ");
-			prec.expr_to_smt2(w, ())?;
-			is_prec = true;
-		}
-
-		write!(w,"(and true ");
-		for stat in &self.statements {
-			stat.expr_to_smt2(w,())?;
-		}
-
-
-		for succ in &self.sucessors {
-			succ.expr_to_smt2(w, ())?;
-		}
-
-		write!(w,")");
-
-		if is_prec {
-			write!(w,")");
-		}
-
-
-		Ok(())
-
+impl Expr {
+	fn to_smt(&self) -> String {
+		let mut x: Vec<u8> = Vec::new();
+		self.expr_to_smt2(&mut Cursor::new(&mut x),()).unwrap();
+		std::str::from_utf8(&x).unwrap().to_owned()
 	}
 }
 

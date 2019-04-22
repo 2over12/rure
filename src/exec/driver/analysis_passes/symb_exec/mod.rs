@@ -1,435 +1,377 @@
 
-use crate::exec::driver::analysis_passes::sir::Sir;
-use std::hash::Hash;
+use rustc::mir::Terminator;
+use std::borrow::Cow;
 use rustc::mir::Rvalue;
-use super::sir::{Node, Declaration};
-use rustc::ty::{Ty,TyKind};
-use rustc::mir::Mir;
+use rustc::mir::interpret::ConstValue;
+use rustc::mir::interpret::Scalar;
+use rustc::ty::Ty;
+use rustc::mir::LocalDecl;
+use rustc::mir::Local;
+use rustc::mir::BasicBlock;
+use rustc::mir::Place;
 use std::collections::HashMap;
-use super::sir::MirVariableProps;
+use rustc::mir::Mir;
+use crate::exec::driver::analysis_passes::sir::Sir;
+use rustc::hir::def_id::DefId;
+use rustc::mir::BasicBlockData;
+use super::sir::Name;
+use super::sir::NodeId;
+use rustc::mir::Statement;
+use rustc::mir::PlaceBase;
+use super::sir::Declaration;
+use rustc::mir::StatementKind;
+use rustc::mir::ProjectionElem;
 use super::sir::Expr;
-use rustc::mir::{TerminatorKind,Operand,PlaceBase,Place, BasicBlock, BasicBlockData,Statement,Terminator,StatementKind};
-use rustc::mir::interpret;
-use super::sir::SymTy;
+use super::sir::MirVariableProp;
 use super::sir::Rator;
-use rustc::mir;
+use rustc::mir::Operand;
+use super::sir::SymTy;
+use rustc::mir::TerminatorKind;
+use super::sir::Edge;
 
 
-struct ExecutionContext<'tcx> {
-	mir: &'tcx Mir<'tcx>,
-	memory: HashMap<Place<'tcx>,NameHolder>,
-	allocator: Rc<RefCell<NameAlloc>>
+const MAX_UNROLL: usize = 4;
+
+#[derive(Clone)]
+struct Memory<'tcx> {
+	assignments: HashMap<Place<'tcx>,Name>,
 }
 
-use std::rc::Rc;
-use std::cell::RefCell;
+impl <'tcx> Memory <'tcx> {
 
-#[derive(Debug)]
-struct NameHolder {
-	name: Rc<RefCell<Name>>
-}
-
-
-impl Clone for NameHolder {
-	fn clone(&self) -> Self {
-		NameHolder {
-			name: Rc::new(RefCell::new(self.to_id()))
-		}
-	}
-}
-
-impl NameHolder {
-	fn new(n: Name) -> NameHolder {
-		NameHolder {
-			name: Rc::new(RefCell::new(n))
+	fn process_operand(&mut self, rand: Operand<'tcx>, nid: NodeId, sir: &mut Sir) -> Expr {
+		match rand {
+			Operand::Copy(plc) => Expr::Ref(self.copy_val(&plc,nid,sir)),
+			Operand::Move(plc) => Expr::Ref(self.move_val(&plc,nid,sir)),
+			Operand::Constant(cst) => Expr::Value(SymTy::from_scalar(match cst.literal.val {
+				ConstValue::Scalar(sc) => match sc {
+					Scalar::Bits{bits, size:_} => bits,
+					_ => unimplemented!(),
+				},
+				_ => unimplemented!()
+			}, cst.ty))
+			
 		}
 	}
 
-	fn update(&mut self, n: Name) {
-		self.name.replace(n);
+	fn new_assignment(&mut self, to: Place<'tcx>, nid: NodeId, sir: &mut Sir) -> Name {
+		let old_name = self.process_plc(&to, nid, sir);
+		let old_decl = sir.get_declaration(old_name);
+		let new_name = sir.add_declaration(old_decl.new_declaration());
+		self.assignments.insert(to, new_name);
+		new_name
 	}
 
-	fn to_id(&self) -> Name {
-		self.name.borrow().clone()
+	fn move_val(&mut self, plc:  &Place<'tcx>,nid: NodeId, sir: &mut Sir) -> Name {
+		let _ = self.process_plc(plc, nid, sir);
+		self.assignments.remove(plc).unwrap()
 	}
-}
 
-#[derive(Debug,Copy,Clone,Eq,PartialEq,Hash)]
-pub struct Name(usize);
-
-impl Name {
-	pub fn to_id(&self) -> String {
-		format!("x{}",&self.0)
+	fn copy_val(&mut self, plc:  &Place<'tcx>,nid: NodeId, sir: &mut Sir) -> Name {
+		let _ = self.process_plc(plc, nid, sir);
+		*self.assignments.get(plc).unwrap()
 	}
-}
 
-
-struct NameAlloc {
-	n_id: usize
-}
-
-impl NameAlloc {
-	fn new() -> NameAlloc {
-		NameAlloc {
-			n_id: 0
+	fn process_plc(&mut self, plc: &Place<'tcx>, nid: NodeId, sir: &mut Sir) -> Name  {
+		println!("{:?}", plc);
+		match plc {
+			Place::Base(_) => *self.assignments.get(plc).unwrap(),
+			Place::Projection(proj) => match proj.elem {
+				ProjectionElem::Deref => {
+					let name_of_current_deref = *self.assignments.get(&proj.base).unwrap();
+					sir.add_property_to_declaration(name_of_current_deref, MirVariableProp::IsDerefed(nid));
+					let name = sir.add_declaration(sir.get_declaration(name_of_current_deref).new_declaration());
+					self.assignments.insert(plc.clone(), name);
+					name
+				},
+				_ => unimplemented!()
+			}
 		}
 	}
 
-	fn alloc(&mut self) -> Name {
-		let n = self.n_id;
-		self.n_id = self.n_id + 1;
-		Name(n)
-	}
-}
-
-impl <'tcx> Clone for ExecutionContext<'tcx> {
-	fn clone(&self) -> Self{
-		ExecutionContext {
-			memory: self.memory.clone(),
-			mir: self.mir,
-			allocator: Rc::clone(&self.allocator)
-		}
-	}
-}
-
-impl <'tcx> ExecutionContext<'tcx> {
-	fn new(mir: &'tcx rustc::mir::Mir<'tcx>) -> (ExecutionContext<'tcx>, HashMap<Declaration,Vec<MirVariableProps>>) {
-		let mut memory = HashMap::new();
-		let mut allocator = NameAlloc::new();
-
-		let mut decls = HashMap::new();
-		let f_id = allocator.alloc();
-		println!("init f {}",f_id.to_id());
-		let lcl = mir::Local::from_usize(0);
-		let decl = Declaration::decl_from(mir.local_decls[lcl].ty, f_id);
-		let loc = Place::Base(PlaceBase::Local(lcl));
-		decls.insert(decl, Vec::new());
-		memory.insert(loc, NameHolder::new(f_id));
-
-		for lcl_id in 1..mir.arg_count+1 {
-			let n_id = allocator.alloc();
-			println!("arg {}",n_id.to_id());
-			let lcl = mir::Local::from_usize(lcl_id);
-			let decl = Declaration::decl_from(mir.local_decls[lcl].ty, n_id);
-			let loc = Place::Base(PlaceBase::Local(lcl));
-			decls.insert(decl,Vec::new());
-			memory.insert(loc, NameHolder::new(n_id));
-		}
+	fn from_args(args: impl Iterator<Item = Local>, mir: &Mir, sir: &mut Sir) -> Memory<'tcx> {
 		
-		(ExecutionContext {
-			mir, 
-			memory,
-			allocator: Rc::new(RefCell::new(allocator))
-		},decls)
+		let mut assignments = HashMap::new();
+
+		let return_plc = Place::Base(PlaceBase::Local(Local::from(0 as usize)));
+		let return_decl = Declaration::decl_from(mir.local_decls[Local::from(0 as usize)].ty);
+		let ret_name = sir.add_declaration(return_decl);
+		assignments.insert(return_plc, ret_name);
+
+		for arg in args {
+			let lcl = &mir.local_decls[arg];
+			let plc = Place::Base(PlaceBase::Local(arg));
+			let declaration = Declaration::decl_from(lcl.ty);
+			let nm = sir.add_declaration(declaration);
+			assignments.insert(plc, nm);
+		}
+
+		Memory {
+			assignments
+		}
+
+	}
+
+	fn add_new_var(&mut self, plc: Place<'tcx>, ty: Ty<'tcx>,sir: &mut Sir) {
+		let decl = Declaration::decl_from(ty);
+		self.assignments.insert(plc, sir.add_declaration(decl));
+	}
+
+	fn remove_var(&mut self, plc: &Place<'tcx>) {
+		self.assignments.remove(&plc);
+	}
+}
+
+
+#[derive(Clone,Hash,PartialEq,Eq)]
+struct Location {
+	mir_def: DefId,
+	block: BasicBlock
+}
+
+impl Location {
+	fn new(mir_def: DefId,  block: BasicBlock) -> Location {
+		Location {
+			mir_def,
+			block
+		}
+	}
+
+	fn get_block_data<'tcx>(&self, mirs: &HashMap<DefId,&'tcx Mir<'tcx>>) -> &'tcx BasicBlockData<'tcx> {
+		&mirs.get(&self.mir_def).unwrap().basic_blocks()[self.block]	
+	}
+
+	fn get_statements<'tcx>(&self,mirs: &HashMap<DefId,&'tcx Mir<'tcx>>) -> &Vec<Statement<'tcx>> {
+		&self.get_block_data(mirs).statements
+	}
+
+	fn get_local_decl<'tcx>(&self, lcl: Local, mir: &HashMap<DefId,&'tcx Mir<'tcx>>) -> &LocalDecl<'tcx> {
+		&mir.get(&self.mir_def).unwrap().local_decls[lcl]
 	}
 
 
-	fn prepare_assign(&mut self) -> Vec<Declaration> {
-		let mut decls = Vec::new();
-			for (key,val) in self.memory.iter_mut() {
-				let t = ty_form_plc_mir(key,self.mir);
-				let n_id = self.allocator.borrow_mut().alloc();
-				let decl = Declaration::decl_from(t, n_id);
-				decls.push(decl);
-				val.update(n_id);
-			}
-			decls
-
+	fn from_block(&self, block: BasicBlock) -> Location {
+		Location {
+			block,
+			mir_def: self.mir_def
+		}
 	}
 
-	fn memory_intersection(&self, other: &ExecutionContext) -> Vec<(Name,Name)> {
-		self.memory.keys().filter_map(|k| {
-			if let Some(val) = other.memory.get(k) {
-				let main_id = self.memory.get(k).unwrap().to_id();
-				let o_id = val.to_id();
-				Some((main_id,o_id))
+
+}
+
+struct Frame<'tcx> {
+	generator: Option<NodeId>,
+	precondition: Option<Expr>,
+	current_memory: Memory<'tcx>,
+	seen_counts: HashMap<Location, usize>,
+	current_loc: Location,
+	return_to: Vec<(Location)>
+} 
+
+impl <'tcx> Frame<'tcx> {
+
+	fn from_new_loc(&self, new_generator: NodeId,new_loc: Location, precondition: Option<Expr>, memory: Memory<'tcx>) -> Frame<'tcx> {
+		let mut seen_counts = self.seen_counts.clone();
+		seen_counts.insert(new_loc.clone(), seen_counts.get(&new_loc).unwrap_or(&0) + 1);
+		Frame {
+			generator: Some(new_generator),
+			current_loc: new_loc,
+			return_to: self.return_to.clone(),
+			seen_counts,
+			current_memory: memory,
+			precondition
+		}
+	}
+
+	fn derive_next_frames(&self, nid: NodeId, term: &Terminator<'tcx>, sir: &mut Sir) -> impl Iterator<Item = Frame<'tcx>> {
+		match &term.kind {
+			TerminatorKind::Goto {target} => if let Some(conv) = self.derive_goto(nid,*target) {
+				vec![conv]
 			} else {
-				None
-			}
+				vec![]
+			}.into_iter(),
+			TerminatorKind::Call {func:_,args:_,destination:_,cleanup:_,from_hir_call:_} => unimplemented!(),
+			TerminatorKind::SwitchInt{discr, switch_ty,values,targets} => self.derive_switch_int(nid,discr, switch_ty, values,targets.clone(),sir).into_iter(),
+			TerminatorKind::Return => vec![].into_iter(),
+			_ => unimplemented!(),
+		}
+	}
+
+	fn derive_switch_int(&self, generator: NodeId, discr: &Operand<'tcx>, switch_ty: Ty, values: &Cow<'tcx,[u128]>, mut targets: Vec<BasicBlock>, sir: &mut Sir) -> Vec<Frame<'tcx>> {
+		let mut new_mem = self.current_memory.clone();
+		let compare_to = new_mem.process_operand(discr.clone(), generator, sir);
+		let otherwise_target = targets.pop().unwrap();
+		let all_other = targets.iter(); 
+		let (mut expressions, mut frames): (Vec<Expr>, Vec<Option<Frame>>) = values.iter().zip(all_other).map(|(desired_val, target)| {
+			let comp = Expr::Value(SymTy::from_scalar(*desired_val, switch_ty));
+			let prec = Expr::BinOp(Rator::Eq, Box::new(comp), Box::new(compare_to.clone()));
+			(prec.clone(), self.block_to_frame(generator, *target, Some(prec), new_mem.clone()))
+		}).unzip();
+
+
+		let init_val = expressions.pop().unwrap();
+
+		let otherwise_expr = Expr::UnOp(Rator::Not, Box::new(expressions.into_iter().fold(init_val, |x,y| Expr::BinOp(Rator::And, Box::new(x), Box::new(y)))));
+
+		frames.push(self.block_to_frame(generator, otherwise_target, Some(otherwise_expr),new_mem));
+
+		frames.into_iter().filter_map(|x| if let Some(val) = x {
+			Some(val)
+		} else {
+			None
 		}).collect()
 	}
 
 
-	fn alloc(&mut self) -> Name {
-		self.allocator.borrow_mut().alloc()
+	fn derive_goto(&self, generator: NodeId, target: BasicBlock ) -> Option<Frame<'tcx>> {
+		self.block_to_frame(generator,target, None,self.current_memory.clone())
 	}
 
-
-	fn get_place_id(&self,plc: &Place<'tcx>) -> Name {
-		match plc {
-			Place::Base(bs) => match bs {
-				PlaceBase::Local(lid) => self.memory.get(&Place::Base(PlaceBase::Local(*lid))).unwrap().to_id() ,
-				_  => unimplemented!()
-			}
-			Place::Projection(proj) => {
-				match proj.elem {
-					mir::ProjectionElem::Deref => self.get_place_id(&proj.base),
-					_ => unimplemented!()
-
-			}
-		}
-	}
-}
-	fn get_ty_from_plc(&self,plc: &Place<'tcx>) -> Ty {
-		ty_form_plc_mir(plc, self.mir)
-	}
-
-
-	fn get_declaration(&self,plc: &Place<'tcx>) -> Declaration {
-		match plc {
-			Place::Base(bs) => match bs {
-				PlaceBase::Local(lid) => Declaration::decl_from(self.mir.local_decls[*lid].ty,self.memory.get(plc).unwrap().to_id()) ,
-				PlaceBase::Static(_st) => unimplemented!(),
-				_  => unimplemented!()
-			}
-			Place::Projection(proj) => {
-					self.get_declaration(&proj.base) 
-				
-			},
-		}
-	}
-}
-
-fn ty_form_plc_mir<'tcx>(plc: &Place<'tcx>, mir: &Mir<'tcx>) -> Ty<'tcx> {
-		match plc {
-			Place::Base(bs) => match bs {
-				PlaceBase::Local(lid) => mir.local_decls[*lid].ty ,
-				PlaceBase::Static(st) => st.ty,
-				_  => unimplemented!()
-			}
-			Place::Projection(proj) => {
-				match proj.elem {
-					mir::ProjectionElem::Deref => match ty_form_plc_mir(&proj.base,mir).sty {
-						TyKind::RawPtr(tam) => tam.ty,
-						TyKind::Ref(_,ty,_) => ty,
-						_ => unimplemented!()
-					},
-					_ => unimplemented!()
-				}
-			},
+	fn block_to_frame(&self, generator: NodeId, target: BasicBlock, precondition: Option<Expr>,memory: Memory<'tcx>) -> Option<Frame<'tcx>> {
+		let n_loc = self.current_loc.from_block(target);
+		if !self.should_examine(&n_loc) {
+			None
+		} else {
+			Some(self.from_new_loc(generator, n_loc, precondition, memory))
 		}
 	}
 
-pub fn eval_mir(mir: &Mir) -> Sir {
-	let (mut ctx, mut init_decls) = ExecutionContext::new(mir);
-	let (node, mut resultant_decls) = process_block_as_node(&mir.basic_blocks()[BasicBlock::from_usize(0)], &mut ctx, None);
-	insert_all(&mut init_decls, &mut resultant_decls);
-	Sir::new(node,init_decls)
-}
 
-
-fn insert_all<K: Eq + Hash,V>(into: &mut HashMap<K,V>, from: &mut HashMap<K,V>) {
-	for (k,v) in from.drain() {
-		into.insert(k, v);
+	fn should_examine(&self, target_loc: &Location) -> bool {
+		*self.seen_counts.get(target_loc).unwrap_or(&0) < MAX_UNROLL
 	}
-}
 
-fn process_block_as_node<'ctx>(blk: &BasicBlockData<'ctx>,ctx: &mut ExecutionContext<'ctx>,  precondition: Option<Expr>) -> (Node, HashMap<Declaration,Vec<MirVariableProps>>) {
-	let (stats,mut dec1) = convert_statements(&blk.statements,ctx);
-	let (sucessors, mut dec2) = process_terminator(ctx,&blk.terminator());
-	insert_all(&mut dec1, &mut dec2);
-	(Node::new(precondition, stats, sucessors), dec1)
-	
-}
 
-fn process_terminator<'ctx>(mut ctx: &mut ExecutionContext<'ctx>,term:&Terminator<'ctx>) -> (Vec<Node>, HashMap<Declaration,Vec<MirVariableProps>>) {
-	match &term.kind {
-		TerminatorKind::Goto{
-			target
-		} => {
-			let (node, decs) = process_block_as_node(&ctx.mir.basic_blocks()[*target], ctx, None);
-			(vec![node], decs) 
-		} TerminatorKind::SwitchInt{
-			discr,
-			switch_ty,
-			values,
-			targets
-		} => {
-			let mut decls: HashMap<_,_> = HashMap::new();
-			let mut nodes: Vec<(ExecutionContext,Node)> = Vec::new();
-			let mut total_prec = Expr::Value(SymTy::Bool(true));
-			let rand = apply_rand(&mut ctx, &discr, &mut decls);
-			for (i,val) in values.into_iter().enumerate() {
-				let prec = Expr::BinOp(Rator::Eq,Box::new(rand.clone()),Box::new(Expr::Value(SymTy::from_scalar(*val, switch_ty))));
-				total_prec = Expr::BinOp(Rator::And, Box::new(prec.clone()), Box::new(total_prec));
-				let curr_target = targets[i];
-				let mut branch_ctx = ctx.clone();
-				let (node,mut new_decls) = process_block_as_node(&ctx.mir.basic_blocks()[curr_target],&mut branch_ctx, Some(prec));
-				nodes.push((branch_ctx,node));
-				insert_all(&mut decls,&mut new_decls);
-			}
-
-			total_prec = Expr::UnOp(Rator::Not, Box::new(total_prec));
-			let mut branch_ctx = ctx.clone();
-			let (node,mut new_decls) = process_block_as_node(&ctx.mir.basic_blocks()[targets[targets.len() - 1]],&mut branch_ctx, Some(total_prec));
-			nodes.push((branch_ctx,node));
-			insert_all(&mut decls,&mut new_decls);
-			let (new_nodes, mut additional_decls) = rendevue_nodes_at_ctx(nodes,&mut ctx);
-			insert_all(&mut decls,&mut additional_decls);
-			(new_nodes,decls)
-		},
-		// TODO inline function Calls.
-		TerminatorKind::Call {
-			func: _,
-			args: _,
-			destination: dest,
-			cleanup: _,
-			from_hir_call: _,
-		} =>  {
-			match dest {
-				None => unimplemented!(),
-				Some((ret,next)) => {
-					let n_id = ctx.alloc();
-					let ty = ctx.get_ty_from_plc(ret);
-					let decl = Declaration::decl_from(ty,n_id);
-					let hand = ctx.memory.get_mut(ret).unwrap();
-					hand.update(n_id);
-					let (node, mut decs) = process_block_as_node(&ctx.mir.basic_blocks()[*next], ctx, None);
-					decs.insert(decl, Vec::new());
-					(vec![node],decs)
-				}
-			}
-		},
-		_ => {(vec![],HashMap::new())}
-
+	fn remove_var(&mut self, lcl: Local) {
+		self.current_memory.remove_var(&Place::Base(PlaceBase::Local(lcl)));
 	}
-}
 
-// TODO Rendevue Local vars not initilaized in the first execution context
-fn rendevue_nodes_at_ctx(mut nodes: Vec<(ExecutionContext,Node)>, ctx: &mut ExecutionContext) -> (Vec<Node>,HashMap<Declaration,Vec<MirVariableProps>>) {
-	
+	fn get_block_data(&self, mirs: &HashMap<DefId,&'tcx Mir<'tcx>>) -> &BasicBlockData<'tcx> {
+		self.current_loc.get_block_data(mirs)
+	}
 
-	let decls = ctx.prepare_assign().drain(..).map(|x|(x, Vec::new())).collect();
+	fn get_statements(&self,mirs: &HashMap<DefId,&'tcx Mir<'tcx>>) -> &Vec<Statement<'tcx>> {
+		self.current_loc.get_statements(mirs)
+	}
 
 
-	   (nodes.drain(..).map(|(res_ctx,nd)| {
-		let mut bindings: Vec<(Name,Name)> = ctx.memory_intersection(&res_ctx);
-		let exprs: Vec<Expr> = bindings.drain(..).map(|(n1,n2)| 
-			Expr::BinOp(Rator::Eq, Box::new(Expr::Ref(n1)), Box::new(Expr::Ref(n2)))).collect();
-		nd.insert_at_leaves(exprs)
-	}).collect(),decls)
-}
+	fn get_local_decl(&self, lcl: Local, mir: &HashMap<DefId,&'tcx Mir<'tcx>>) -> &LocalDecl<'tcx> {
+		self.current_loc.get_local_decl(lcl, mir)
+	}
 
-fn convert_statements<'ctx>(stats: &Vec<Statement<'ctx>>, ctx: &mut ExecutionContext<'ctx>) -> (Vec<Expr>, HashMap<Declaration,Vec<MirVariableProps>>) {
-	let mut v: Vec<(Vec<Expr>,HashMap<Declaration,Vec<MirVariableProps>>)> = stats.into_iter().map(|x|symbolize_statement(x,ctx)).collect();
-	let mut exprs = Vec::new();
-	let mut total_decls = HashMap::new();
+	fn add_var(&mut self, lcl: Local, mir: &HashMap<DefId,&'tcx Mir<'tcx>>, sir: &mut Sir) {
+		let plc = PlaceBase::Local(lcl);
+		let dcl = self.get_local_decl(lcl, mir);
+		self.current_memory.add_new_var(Place::Base(plc), dcl.ty,sir);
+	}
 
-	for (mut ex, mut dec) in v.drain(..) {
-		exprs.append(&mut ex);
-		for (key,val) in dec.drain() {
-			total_decls.insert(key, val);
+	fn assign(&mut self, to: &Place<'tcx>, from: &Box<Rvalue<'tcx>>, nid: NodeId, sir: &mut Sir) { 
+		let expr = self.evaluate_rvalue(from.clone(),nid,sir);
+		let new_name = self.current_memory.new_assignment(to.clone(),nid,sir);
+		let set = Expr::BinOp(Rator::Eq, Box::new(Expr::Ref(new_name)), Box::new(expr));
+		sir.add_expr_to_node(nid,set);
+	}
+
+	fn evaluate_rvalue(&mut self,rval: Box<Rvalue<'tcx>>, nid: NodeId, sir: &mut Sir) -> Expr {
+		match *rval {
+			Rvalue::Use(rand) => self.current_memory.process_operand(rand,nid,sir),
+			Rvalue::BinaryOp(binop, rand1, rand2) => Expr::BinOp(Rator::from_mir_bin(&binop),
+				Box::new(self.current_memory.process_operand(rand1,nid,sir)),Box::new(self.current_memory.process_operand(rand2,nid,sir))),
+			Rvalue::UnaryOp(unop, rand) => Expr::UnOp(Rator::from_mir_un(&unop), Box::new(self.current_memory.process_operand(rand,nid,sir))),
+			Rvalue::Cast(_,rand,_) => self.current_memory.process_operand(rand,nid,sir),
+			Rvalue::Ref(_,_,plc) => Expr::Ref(self.current_memory.process_plc(&plc,nid, sir)),
+			_ => unimplemented!(),
 		}
-
 	}
 
-	(exprs,total_decls)
-}
+	fn create_entry(def_id: DefId, mir: &Mir<'tcx>, sir: &mut Sir) -> Frame<'tcx> {
+		let bid = BasicBlock::from(0 as usize);
+		let args = mir.args_iter();
+		let frm = Frame {
+			seen_counts: HashMap::new(),
+			generator: None,
+			precondition: None,
+			current_memory: Memory::from_args(args, mir, sir),
+			current_loc: Location::new(def_id,bid),
+			return_to: Vec::new()
+		};
 
-fn symbolize_statement<'ctx>(stat: &Statement<'ctx>, ctx: &mut ExecutionContext<'ctx>) -> (Vec<Expr>, HashMap<Declaration,Vec<MirVariableProps>>) {
-	let mut decls = HashMap::new();
-	match &stat.kind {
-		StatementKind::StorageLive(lcl) => {
-			let n_name = ctx.alloc();
-			ctx.memory.insert(Place::Base(PlaceBase::Local(*lcl)),NameHolder::new(n_name));
-			decls.insert(Declaration::decl_from(ctx.mir.local_decls[*lcl].ty,n_name),Vec::new());
-			(vec![],decls)
-		} ,
-		StatementKind::StorageDead(lcl) => {
-			ctx.memory.remove(&Place::Base(PlaceBase::Local(*lcl)));
-			(vec![],decls)
-		}
-		StatementKind::Assign(loc, val) => {
-		 assign_into(ctx,loc,val)
-
-
-		},
-		_ => (vec![],decls),
+		frm
 	}
-}
-
-fn assign_into<'ctx>(ctx: &mut ExecutionContext<'ctx>, loc: &rustc::mir::Place<'ctx>, val: &Rvalue<'ctx>) -> (Vec<Expr>,HashMap<Declaration,Vec<MirVariableProps>> ) {
-	let new_id = ctx.alloc();
-	let new_dec = Declaration::decl_from(ctx.get_ty_from_plc(loc), new_id);
-	ctx.memory.get_mut(loc).unwrap().update(new_id);
-	let mut declerations = HashMap::new();
-	declerations.insert(new_dec,Vec::new());
-	
-	(vec![Expr::BinOp(Rator::Eq, Box::new(Expr::Ref(new_id)),Box::new(match val {
-		Rvalue::Use(rand1) => {
-			let val = apply_rand(ctx,rand1, &mut declerations);
-			val
-		},
-		Rvalue::BinaryOp(op,rand1,rand2) => assign_bin_op(ctx,op, rand1, rand2, &mut declerations),
-		Rvalue::CheckedBinaryOp(op,rand1,rand2) => assign_bin_op(ctx,op, rand1, rand2, &mut declerations),
-		Rvalue::Cast(_castknd,rand,_ty) => {
-			let rand = apply_rand(ctx, rand, &mut declerations);
-			//TODO dont just call it here
-			rand
-		},
-		Rvalue::UnaryOp(op,rand) => {
-			let rand = Box::new(apply_rand(ctx,rand, &mut declerations));
-			let op = Rator::from_mir_un(op);
-			Expr::UnOp(op,rand)
-		},
-		Rvalue::Ref(_reg,_brw_kind,plc) => {
-			Expr::Ref(ctx.memory.get(plc).unwrap().to_id())
-			//TODO Handle fixing up Cells so that edits propogate. 
-		},
-		_ => unimplemented!()
-	}))],declerations)
-}
 
 
-fn assign_bin_op<'ctx>(ctx: &mut ExecutionContext<'ctx>,op: &mir::BinOp, rand1: &Operand<'ctx>, rand2: &Operand<'ctx>, decls: &mut HashMap<Declaration,Vec<MirVariableProps>>) -> Expr {
-			let rand1 = Box::new(apply_rand(ctx, rand1,decls));
-			let rand2 = Box::new(apply_rand(ctx, rand2 ,decls));
-			let n_op = Rator::from_mir_bin(op);
-			Expr::BinOp(n_op,rand1,rand2)
-}
-
-
-fn apply_rand<'ctx>(ctx: &mut ExecutionContext<'ctx>, rand: &Operand<'ctx>, decls: &mut HashMap<Declaration,Vec<MirVariableProps>>) -> Expr {
-	match rand {
-		Operand::Copy(Place::Base(loc)) => {
-		 let loc = Place::Base(loc.clone());
-		 Expr::Ref(ctx.memory.get(&loc).unwrap().to_id())},
-		Operand::Move(Place::Base(loc)) => { 
-			let loc = Place::Base(loc.clone());
-			Expr::Ref(ctx.memory.remove(&loc).unwrap().to_id())},
-		Operand::Constant(val) => {
-			match val.literal.val {
-				interpret::ConstValue::Scalar(scl) => Expr::Value(SymTy::from_scalar(match scl {
-					mir::interpret::Scalar::Bits {
-						size: _,
-						bits,
-					} => bits,
-					interpret::Scalar::Ptr(_) => unimplemented!()
-				},val.literal.ty)),
-				_ => unimplemented!()
-			}
-		},
-		Operand::Copy(plcproj) => {
-			deref_unknown(ctx, plcproj, decls)
-		},
-		Operand::Move(plcproj) => {
-			deref_unknown(ctx, plcproj, decls)
+	fn add_edge_to(&self, my_id: NodeId, sir: &mut Sir) {
+		if let Some(gen) = self.generator {
+			sir.add_edge(gen,Edge::new(self.precondition.clone(),my_id ))
 		}
 	}
 }
 
-fn deref_unknown(ctx: &mut ExecutionContext,  plc: &Place,decls: &mut HashMap<Declaration,Vec<MirVariableProps>>) -> Expr {
-	let n_id = ctx.alloc();
-	println!("deref {}",ctx.get_place_id(plc).to_id());
-	let dec = ctx.get_declaration(plc);
-	println!("{:?}", decls);
-	println!("{:?}",dec);
-	let props: &mut Vec<_> = decls.get_mut(&dec).unwrap();
-	props.push(MirVariableProps::IsDerefed);
-
-
-	let ty = ctx.get_ty_from_plc(plc);
-	let decl = Declaration::decl_from(ty, n_id);
-	decls.insert(decl,Vec::new());
-	Expr::Ref(n_id)
+pub struct ExecutionContext<'tcx> {
+	mirs: HashMap<DefId,&'tcx Mir<'tcx>>,
+	stack: Vec<Frame<'tcx>>,
+	result: Sir
 }
+
+impl <'tcx> ExecutionContext<'tcx> {
+	pub fn evaluate(mut self) -> (Sir, NodeId) {
+		let mut entry = None;
+		while let Some(mut curr_frame) =  self.stack.pop() {
+			let cid = self.process_frame(&mut curr_frame);
+			if entry.is_none() {
+				entry = Some(cid);
+			}
+		}
+
+		(self.result, entry.unwrap())
+	}
+
+	pub fn create_from_entry(entry: DefId, mirs: HashMap<DefId,&'tcx Mir<'tcx>>) -> ExecutionContext {
+		let mut stack = Vec::new();
+		let mut result = Sir::new();
+		let frm = Frame::create_entry(entry, mirs.get(&entry).unwrap(), &mut result);
+
+		stack.push(frm);
+
+		ExecutionContext {
+			mirs,
+			stack,
+			result
+		}
+	}
+
+
+	fn process_frame(&mut self, curr_frame: &mut Frame<'tcx>) -> NodeId {
+		let stats:Vec<Statement<'tcx>> = curr_frame.get_statements(&self.mirs).clone().drain(..).collect();
+		let blk:BasicBlockData<'tcx> = curr_frame.get_block_data(&self.mirs).clone();
+
+		let nid = self.perform_statements(curr_frame, &stats);
+		self.push_next_frames(blk,&curr_frame,nid);
+		curr_frame.add_edge_to(nid, &mut self.result);
+		nid
+	}
+
+
+	fn push_next_frames(&mut self, blk: BasicBlockData<'tcx>, curr_frame: &Frame<'tcx>, nid: NodeId) {
+		let term = blk.terminator();
+		for fr in curr_frame.derive_next_frames(nid, term, &mut self.result) {
+			self.stack.push(fr);
+		}
+	}
+
+	fn perform_statements(&mut self, curr_frame: &mut Frame<'tcx>, statements: &Vec<Statement<'tcx>>) -> NodeId {
+		let nid = self.result.add_node();
+		for stat in statements {
+			match &stat.kind {
+				StatementKind::Assign(to,from) => curr_frame.assign(to,from, nid, &mut self.result),
+				StatementKind::StorageLive(lcl) => curr_frame.add_var(*lcl,&self.mirs, &mut self.result),
+				StatementKind::StorageDead(lcl) => curr_frame.remove_var(*lcl),
+				StatementKind::Nop => (),
+				_ => unimplemented!(),
+			}
+		}
+		nid
+	} 
+}
+

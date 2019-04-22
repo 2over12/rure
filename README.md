@@ -1,6 +1,6 @@
 # RURE (Reliable Unsafe Rust Engine)
 
-RURE's goal is to allow rust programmers to have confidence in their unsafe code. RURE accomplishes this by applying symbolic verification to safe functions that contain unsafe blocks. Symbolic verification allows rure to model the function's behavior accross all inputs to discover the undefined behavior listed here: https://doc.rust-lang.org/reference/behavior-considered-undefined.html
+RURE's goal is to allow rust programmers to have confidence in their unsafe code. RURE accomplishes this by applying symbolic verification to safe functions that contain unsafe blocks. Symbolic verification allows rure to model the function's behavior accross all inputs to discover witnesses for the undefined behaviors listed here: https://doc.rust-lang.org/reference/behavior-considered-undefined.html
 
 ## Current State:
 Recently finished extremely basic symbolic execution foir booleans and integers that as an MVP can detect if a pointer could be dereferenced as null.

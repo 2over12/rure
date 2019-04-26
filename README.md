@@ -3,7 +3,7 @@
 RURE's goal is to allow rust programmers to have confidence in their unsafe code. RURE accomplishes this by applying symbolic verification to safe functions that contain unsafe blocks. Symbolic verification allows rure to model the function's behavior accross all inputs to discover witnesses for the undefined behaviors listed here: https://doc.rust-lang.org/reference/behavior-considered-undefined.html
 
 ## How to Run:
-Currently tuple structs are not implemented so checked operators are not supported therefore please run like: ` rustc -Z force-overflow-checks=off  [file]`
+Currently tuple structs are not implemented so checked operators are not supported therefore please run: ` cargo run -Z force-overflow-checks=off  [file]`
 
 ## Current State:
 Recently finished extremely basic symbolic execution for booleans and integers that as an MVP can detect if a pointer could be dereferenced as null.

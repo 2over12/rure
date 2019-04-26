@@ -1,11 +1,15 @@
 #![crate_type="lib"]
 
-fn stupid_func(p: usize) -> u32 {
+fn stupid_func(p: usize, should_deref: bool) -> u32 {
 
     let v: *const u32 = p as *const u32;
-    unsafe {
+    if should_deref {
+    	unsafe {
             return *v;
-    }
+    	}
+	}
+
+	return 3;
 }
 
 fn nullish() {

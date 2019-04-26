@@ -13,6 +13,7 @@ path = "src/bin/main.rs"
 
 [dependencies]
 rsmt2 = "0.10.0"
+text_io = "0.1.7"
 
 [dev-dependencies]
 compiletest_rs = { version = "*", features = [ "stable" ] }

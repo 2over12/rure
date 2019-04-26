@@ -30,7 +30,7 @@ use rustc::mir::TerminatorKind;
 use super::sir::Edge;
 
 
-const MAX_UNROLL: usize = 4;
+const MAX_UNROLL: usize = 5;
 
 #[derive(Clone)]
 struct Memory<'tcx> {
@@ -89,19 +89,19 @@ impl <'tcx> Memory <'tcx> {
 		}
 	}
 
-	fn from_args(args: impl Iterator<Item = Local>, mir: &Mir, sir: &mut Sir) -> Memory<'tcx> {
+	fn from_args(args: impl Iterator<Item = Local>, did: DefId, mir: &Mir, sir: &mut Sir) -> Memory<'tcx> {
 		
 		let mut assignments = HashMap::new();
 
 		let return_plc = Place::Base(PlaceBase::Local(Local::from(0 as usize)));
-		let return_decl = Declaration::decl_from(mir.local_decls[Local::from(0 as usize)].ty);
+		let return_decl = Declaration::decl_from(mir.local_decls[Local::from(0 as usize)].ty,Some((did,Local::from(0 as usize))));
 		let ret_name = sir.add_declaration(return_decl);
 		assignments.insert(return_plc, ret_name);
 
 		for arg in args {
 			let lcl = &mir.local_decls[arg];
 			let plc = Place::Base(PlaceBase::Local(arg));
-			let declaration = Declaration::decl_from(lcl.ty);
+			let declaration = Declaration::decl_from(lcl.ty,Some((did,arg)));
 			let nm = sir.add_declaration(declaration);
 			assignments.insert(plc, nm);
 		}
@@ -112,8 +112,8 @@ impl <'tcx> Memory <'tcx> {
 
 	}
 
-	fn add_new_var(&mut self, plc: Place<'tcx>, ty: Ty<'tcx>,sir: &mut Sir) {
-		let decl = Declaration::decl_from(ty);
+	fn add_new_var(&mut self, plc: Place<'tcx>, ty: Ty<'tcx>,sir: &mut Sir, did: Option<(DefId,Local)>) {
+		let decl = Declaration::decl_from(ty,did);
 		self.assignments.insert(plc, sir.add_declaration(decl));
 	}
 
@@ -135,6 +135,10 @@ impl Location {
 			mir_def,
 			block
 		}
+	}
+
+	fn get_def_id(&self) -> DefId {
+		self.mir_def
 	}
 
 	fn get_block_data<'tcx>(&self, mirs: &HashMap<DefId,&'tcx Mir<'tcx>>) -> &'tcx BasicBlockData<'tcx> {
@@ -263,7 +267,7 @@ impl <'tcx> Frame<'tcx> {
 	fn add_var(&mut self, lcl: Local, mir: &HashMap<DefId,&'tcx Mir<'tcx>>, sir: &mut Sir) {
 		let plc = PlaceBase::Local(lcl);
 		let dcl = self.get_local_decl(lcl, mir);
-		self.current_memory.add_new_var(Place::Base(plc), dcl.ty,sir);
+		self.current_memory.add_new_var(Place::Base(plc), dcl.ty,sir, Some((self.current_loc.get_def_id(),lcl)));
 	}
 
 	fn assign(&mut self, to: &Place<'tcx>, from: &Box<Rvalue<'tcx>>, nid: NodeId, sir: &mut Sir) { 
@@ -292,7 +296,7 @@ impl <'tcx> Frame<'tcx> {
 			seen_counts: HashMap::new(),
 			generator: None,
 			precondition: None,
-			current_memory: Memory::from_args(args, mir, sir),
+			current_memory: Memory::from_args(args, def_id, mir, sir),
 			current_loc: Location::new(def_id,bid),
 			return_to: Vec::new()
 		};

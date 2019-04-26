@@ -78,13 +78,20 @@ impl <V> IntoIterator for &NameVec<V> {
 }
 
 
-#[derive(Clone, Copy,Eq,PartialEq, Debug)]
+#[derive(Hash,Clone, Copy,Eq,PartialEq, Debug)]
 pub struct Name(usize);
 
 
 impl Name {
 	pub fn to_id(&self) -> String {
 		format!("x{}",self.0)
+	}
+
+
+	pub fn from_str(val: &str) -> Name {
+		let id: usize;
+		scan!(val.bytes() => "x{}", id);
+		Name(id)
 	}
 }
 

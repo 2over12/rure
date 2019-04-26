@@ -1,3 +1,4 @@
+use rustc::mir::Local;
 use crate::exec::driver::analysis_passes::smt::solve_sir;
 use rustc::mir::Mir;
 use rustc::ty::TyCtxt;
@@ -16,7 +17,19 @@ mod smt;
 use symb_exec::ExecutionContext;
 
 #[derive(PartialEq)]
-pub struct ErrorInfo;
+pub struct ErrorInfo {
+	error_type: String,
+	assignments: Vec<(String,String)>
+}
+
+impl ErrorInfo {
+	fn from(entry_id: DefId, model: HashMap<(DefId,Local), SymTy>, mir: &Mir, compiler: &TyCtxt) -> ErrorInfo {
+		let h_map = compiler.hir();
+		let h_id = h_map.as_local_hir_id(entry_id).unwrap();
+		println!("{:?}", h_map.get_by_hir_id(h_id));
+		unimplemented!();
+	}
+}
 
 #[derive(PartialEq)]
 pub enum PassResult {
@@ -63,11 +76,16 @@ impl  <'a,'tcx,'gcx >AnalysisHandler<'a,'tcx, 'gcx> {
 				None
 			});
 
+			println!("{:?}",sir);
+			println!("{}",sir.to_smt(entryid));
+			let mut errs = Vec::new();
 			for (interested_name, MirVariableProp::IsDerefed(nid) ) in vals {
 				let assign = Expr::BinOp(Rator::Eq, Box::new(Expr::Ref(interested_name)), Box::new(Expr::Value(SymTy::Integer(0))));
 				let pc = sir.get_path_constraint(*nid);
 				let add = vec![pc,assign];
-				println!("{}", solve_sir(&sir,entryid,add))
+				if let Some(model) = solve_sir(&sir,entryid,add) {
+					errs.push(ErrorInfo::from(self.start, model, &self.code, &self.ctx));
+				}
 			}
 
 			vec![]

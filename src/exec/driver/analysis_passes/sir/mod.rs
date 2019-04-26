@@ -1,5 +1,7 @@
 
 
+use rustc::hir::def_id::DefId;
+use rustc::mir::Local;
 use std::io::Write;
 use rsmt2::errors::SmtRes;
 use rustc::ty::{Ty, TyKind};
@@ -201,7 +203,7 @@ impl Sir {
 }
 
 #[derive(Debug)]
-pub struct Declaration(SymTy, Vec<MirVariableProp>);
+pub struct Declaration(SymTy, Vec<MirVariableProp>, Option<(DefId,Local)>);
 
 impl Declaration {
 	fn add_property(&mut self, prop: MirVariableProp) {
@@ -209,11 +211,15 @@ impl Declaration {
 	}
 
 	pub fn new_declaration(&self) -> Declaration {
-		Declaration(self.0.clone(), vec![])
+		Declaration(self.0.clone(), vec![], self.2.clone())
 	}
 
 	pub fn get_property(&self) -> &Vec<MirVariableProp> {
 		&self.1
+	}
+
+	pub fn get_location(&self) -> &Option<(DefId,Local)> {
+		&self.2
 	}
 }
 
@@ -284,13 +290,13 @@ impl Rator {
 }
 
 impl Declaration {
-	pub fn decl_from(ty: Ty) -> Declaration {	
+	pub fn decl_from(ty: Ty, arg_loc: Option<(DefId,Local)>) -> Declaration {	
 		Declaration(match ty.sty {
 			TyKind::Bool => SymTy::Bool(false),
 			TyKind::Int(_) => SymTy::Integer(0),
 			TyKind::Uint(_) => SymTy::Integer(0),
 			TyKind::RawPtr(_) => SymTy::Integer(0),
-			_ => unimplemented!()}, vec![])
+			_ => unimplemented!()}, vec![],arg_loc)
 	}	
 }
 

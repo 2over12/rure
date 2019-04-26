@@ -297,7 +297,7 @@ impl Declaration {
 			TyKind::Uint(_) => SymTy::Integer(0),
 			TyKind::RawPtr(_) => SymTy::Integer(0),
 			_ => unimplemented!()}, vec![],arg_loc)
-	}	
+	}
 }
 
 impl Sort2Smt for Declaration {
@@ -330,6 +330,10 @@ impl SymTy {
 
 		}
 	}
+
+	pub fn from_boolean(b: bool) -> SymTy {
+		SymTy::Bool(b)
+	}	
 }
 
 

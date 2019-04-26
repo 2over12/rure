@@ -188,7 +188,7 @@ impl <'tcx> Frame<'tcx> {
 		}
 	}
 
-	fn derive_next_frames(&self, nid: NodeId, term: &Terminator<'tcx>, sir: &mut Sir) -> impl Iterator<Item = Frame<'tcx>> {
+	fn derive_next_frames(&mut self, nid: NodeId, term: &Terminator<'tcx>, sir: &mut Sir) -> impl Iterator<Item = Frame<'tcx>> {
 		match &term.kind {
 			TerminatorKind::Goto {target} => if let Some(conv) = self.derive_goto(nid,*target) {
 				vec![conv]
@@ -197,6 +197,16 @@ impl <'tcx> Frame<'tcx> {
 			}.into_iter(),
 			TerminatorKind::Call {func:_,args:_,destination:_,cleanup:_,from_hir_call:_} => unimplemented!(),
 			TerminatorKind::SwitchInt{discr, switch_ty,values,targets} => self.derive_switch_int(nid,discr, switch_ty, values,targets.clone(),sir).into_iter(),
+			TerminatorKind::Assert{expected,cond,msg:_,target, cleanup:_} => {
+				let test_val = SymTy::from_boolean(*expected);
+				let rand = self.current_memory.process_operand(cond.clone(), nid, sir);
+				let assert_expr = Expr::BinOp(Rator::Eq, Box::new(Expr::Value(test_val)), Box::new(rand));
+				sir.add_expr_to_node(nid,assert_expr);
+				if let Some(conv) = self.derive_goto(nid,*target) {
+				vec![conv]
+			} else {
+				vec![]
+			}.into_iter()},
 			TerminatorKind::Return => vec![].into_iter(),
 			_ => unimplemented!(),
 		}
@@ -351,13 +361,13 @@ impl <'tcx> ExecutionContext<'tcx> {
 		let blk:BasicBlockData<'tcx> = curr_frame.get_block_data(&self.mirs).clone();
 
 		let nid = self.perform_statements(curr_frame, &stats);
-		self.push_next_frames(blk,&curr_frame,nid);
+		self.push_next_frames(blk,curr_frame,nid);
 		curr_frame.add_edge_to(nid, &mut self.result);
 		nid
 	}
 
 
-	fn push_next_frames(&mut self, blk: BasicBlockData<'tcx>, curr_frame: &Frame<'tcx>, nid: NodeId) {
+	fn push_next_frames(&mut self, blk: BasicBlockData<'tcx>, curr_frame: &mut Frame<'tcx>, nid: NodeId) {
 		let term = blk.terminator();
 		for fr in curr_frame.derive_next_frames(nid, term, &mut self.result) {
 			self.stack.push(fr);

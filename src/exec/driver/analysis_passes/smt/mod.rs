@@ -9,7 +9,7 @@ use rsmt2::Solver;
 use super::sir::NodeId;
 use std::collections::HashMap;
 use rsmt2::errors::SmtRes;
-
+use rsmt2::print::Expr2Smt;
 
 use super::sir::{Rator,Expr,SymTy,Name};
 
@@ -31,7 +31,6 @@ pub fn solve_sir(sir: &Sir, entry: NodeId, additional_constraints: Vec<Expr>) ->
 	}
 
 	let res:String = sir.to_smt(entry);
-	println!("{}",res);
 	solver.assert(&res).unwrap();
 	
 	if solver.check_sat().unwrap() {

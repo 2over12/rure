@@ -9,6 +9,7 @@ use rustc::ty::InstanceDef;
 use rustc_mir::transform::MirPass;
 use std::collections::HashMap;
 use self::sir::{MirVariableProp,Rator,Expr,SymTy};
+use syntax_pos::Span;
 
 mod symb_exec;
 mod sir;
@@ -16,18 +17,54 @@ mod smt;
 
 use symb_exec::ExecutionContext;
 
-#[derive(PartialEq)]
+#[derive(PartialEq,Debug)]
 pub struct ErrorInfo {
 	error_type: String,
-	assignments: Vec<(String,String)>
+	assignments: Vec<(String,String)>,
+	def_id: DefId,
+	span: Span
 }
 
 impl ErrorInfo {
 	fn from(entry_id: DefId, model: HashMap<(DefId,Local), SymTy>, mir: &Mir, compiler: &TyCtxt) -> ErrorInfo {
-		let h_map = compiler.hir();
-		let h_id = h_map.as_local_hir_id(entry_id).unwrap();
-		println!("{:?}", h_map.get_by_hir_id(h_id));
-		unimplemented!();
+		let error_type = "Null Dereference".to_owned();
+
+
+		 let assignments = (0..mir.arg_count).filter_map(|i| {
+			let lcl = i + 1;
+			let mp = (entry_id,Local::from(lcl));
+			if let Some(val) = model.get(&mp) {
+				Some((format!("Argument {}: ",lcl), format!("{:?}",val)))
+			} else {
+				None
+			}}).collect();
+		
+		ErrorInfo {
+			error_type,
+			assignments,
+			span: mir.span,
+			def_id: entry_id
+		}
+	}
+
+	pub fn get_span(&self) -> Span {
+		self.span
+	}
+
+	pub fn get_type(&self) -> &str {
+		&self.error_type
+	}
+
+	pub fn get_witness(&self) -> String {
+		let mut total = String::new();
+		total.push_str("Witness:\n");
+		for (name, val) in &self.assignments {
+			total.push_str(name);
+			total.push_str(val);
+			total.push('\n');
+		}
+
+		total
 	}
 }
 
@@ -75,9 +112,7 @@ impl  <'a,'tcx,'gcx >AnalysisHandler<'a,'tcx, 'gcx> {
 			} else {
 				None
 			});
-
-			println!("{:?}",sir);
-			println!("{}",sir.to_smt(entryid));
+			
 			let mut errs = Vec::new();
 			for (interested_name, MirVariableProp::IsDerefed(nid) ) in vals {
 				let assign = Expr::BinOp(Rator::Eq, Box::new(Expr::Ref(interested_name)), Box::new(Expr::Value(SymTy::Integer(0))));
@@ -87,7 +122,6 @@ impl  <'a,'tcx,'gcx >AnalysisHandler<'a,'tcx, 'gcx> {
 					errs.push(ErrorInfo::from(self.start, model, &self.code, &self.ctx));
 				}
 			}
-
-			vec![]
+			errs
 	}
 }

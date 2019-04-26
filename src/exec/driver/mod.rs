@@ -31,9 +31,13 @@ impl Callbacks for GetTcntx {
             for id in ids {
                 let pass_handler = analysis_passes::AnalysisHandler::new(id, &tcx);
                 let errors = pass_handler.run_all_analyses();
-                //compiler.session().abort();
+                for error in errors {
+                    let mut err = compiler.session().struct_span_err(error.get_span(),error.get_type());
+                    err.span_help(error.get_span(), &error.get_witness());
+                    err.emit();                
+                }
 
-            }
+                }
         });
 
         compiler.session().abort_if_errors();

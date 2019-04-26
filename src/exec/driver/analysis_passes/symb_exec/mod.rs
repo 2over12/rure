@@ -73,7 +73,6 @@ impl <'tcx> Memory <'tcx> {
 	}
 
 	fn process_plc(&mut self, plc: &Place<'tcx>, nid: NodeId, sir: &mut Sir) -> Name  {
-		println!("{:?}", plc);
 		match plc {
 			Place::Base(_) => *self.assignments.get(plc).unwrap(),
 			Place::Projection(proj) => match proj.elem {
@@ -295,6 +294,8 @@ impl <'tcx> Frame<'tcx> {
 			Rvalue::UnaryOp(unop, rand) => Expr::UnOp(Rator::from_mir_un(&unop), Box::new(self.current_memory.process_operand(rand,nid,sir))),
 			Rvalue::Cast(_,rand,_) => self.current_memory.process_operand(rand,nid,sir),
 			Rvalue::Ref(_,_,plc) => Expr::Ref(self.current_memory.process_plc(&plc,nid, sir)),
+			Rvalue::CheckedBinaryOp(binop,rand1,rand2) => Expr::BinOp(Rator::from_mir_bin(&binop),
+				Box::new(self.current_memory.process_operand(rand1,nid,sir)),Box::new(self.current_memory.process_operand(rand2,nid,sir))),
 			_ => unimplemented!(),
 		}
 	}
@@ -379,8 +380,8 @@ impl <'tcx> ExecutionContext<'tcx> {
 		for stat in statements {
 			match &stat.kind {
 				StatementKind::Assign(to,from) => curr_frame.assign(to,from, nid, &mut self.result),
-				StatementKind::StorageLive(lcl) => curr_frame.add_var(*lcl,&self.mirs, &mut self.result),
-				StatementKind::StorageDead(lcl) => curr_frame.remove_var(*lcl),
+				StatementKind::StorageLive(lcl) => {curr_frame.add_var(*lcl,&self.mirs, &mut self.result)},
+				StatementKind::StorageDead(lcl) => {curr_frame.remove_var(*lcl)},
 				StatementKind::Nop => (),
 				_ => unimplemented!(),
 			}

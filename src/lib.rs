@@ -4,6 +4,7 @@ extern crate rustc_driver;
 extern crate rustc;
 extern crate rustc_interface;
 extern crate rustc_mir;
+extern crate syntax_pos;
 #[macro_use] extern crate text_io;
 
 mod exec;
